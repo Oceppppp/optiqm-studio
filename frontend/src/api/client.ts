@@ -1,5 +1,11 @@
 import type { BatchRunResponse, CaseRunResult, ModuleMeta, SheetDataDict, WorkspaceCase } from "../types";
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
+
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -15,7 +21,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 }
 
 export async function fetchModules(): Promise<ModuleMeta[]> {
-  const data = await jsonOrThrow<{ modules: ModuleMeta[] }>(await fetch("/api/modules"));
+  const data = await jsonOrThrow<{ modules: ModuleMeta[] }>(await fetch(apiUrl("/api/modules")));
   return data.modules;
 }
 
@@ -23,14 +29,14 @@ export async function importFiles(files: File[]): Promise<WorkspaceCase[]> {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   const data = await jsonOrThrow<{ cases: WorkspaceCase[] }>(
-    await fetch("/api/workspace/import", { method: "POST", body: fd })
+    await fetch(apiUrl("/api/workspace/import"), { method: "POST", body: fd })
   );
   return data.cases;
 }
 
 export async function importGSheet(url: string): Promise<WorkspaceCase[]> {
   const data = await jsonOrThrow<{ cases: WorkspaceCase[] }>(
-    await fetch("/api/workspace/import-gsheet", {
+    await fetch(apiUrl("/api/workspace/import-gsheet"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
@@ -41,7 +47,7 @@ export async function importGSheet(url: string): Promise<WorkspaceCase[]> {
 
 export async function validateCase(module: string | null, sheet: SheetDataDict): Promise<{ status: "valid" | "invalid" | "needs_module"; error: string | null }> {
   return jsonOrThrow(
-    await fetch("/api/workspace/validate", {
+    await fetch(apiUrl("/api/workspace/validate"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ module, sheet }),
@@ -51,7 +57,7 @@ export async function validateCase(module: string | null, sheet: SheetDataDict):
 
 export async function runBatch(cases: WorkspaceCase[]): Promise<BatchRunResponse> {
   return jsonOrThrow(
-    await fetch("/api/batch/run", {
+    await fetch(apiUrl("/api/batch/run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cases }),
@@ -71,7 +77,7 @@ function triggerDownload(blob: Blob, filename: string) {
 }
 
 export async function downloadReport(format: "xlsx" | "pdf", workspaceName: string, items: CaseRunResult[]) {
-  const res = await fetch(`/api/report/${format}`, {
+  const res = await fetch(apiUrl(`/api/report/${format}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workspace_name: workspaceName, items }),
@@ -83,11 +89,11 @@ export async function downloadReport(format: "xlsx" | "pdf", workspaceName: stri
 }
 
 export function downloadSampleWorkbook() {
-  window.location.href = "/api/templates/sample-workbook.xlsx";
+  window.location.href = apiUrl("/api/templates/sample-workbook.xlsx");
 }
 
 export function downloadModuleTemplate(key: string, format: "xlsx" | "csv" = "xlsx") {
-  window.location.href = `/api/modules/${key}/template?format=${format}`;
+  window.location.href = apiUrl(`/api/modules/${key}/template?format=${format}`);
 }
 
 export function exportWorkspaceOqm(name: string, cases: WorkspaceCase[]) {

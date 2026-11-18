@@ -40,3 +40,21 @@ cd backend && ../.venv/bin/python -m pytest -v
 - [Format File Upload](docs/FILE_FORMAT.md)
 - [Panduan Menambah Modul Baru](docs/MODULE_GUIDE.md)
 - Contoh workbook siap upload: [OptiQM_Sample_10_Modul.xlsx](samples/OptiQM_Sample_10_Modul.xlsx)
+
+## Deploy Online (Netlify + Backend Python)
+Karena Netlify hanya menghosting frontend statis, deploy aplikasi web terbagi menjadi dua bagian:
+
+1. **Backend FastAPI (`backend/`)** — deploy ke **Render** (otomatis memakai `render.yaml`), **Railway**, **Fly.io**, atau host Docker mana pun memakai `backend/Dockerfile` dengan perintah:
+   ```bash
+   uvicorn optiqm.api.app:app --host 0.0.0.0 --port $PORT
+   ```
+   Pastikan endpoint `/api/health` merespons `{"status": "ok"}`.
+
+2. **Frontend React (`frontend/`) di Netlify** — repo ini sudah menyertakan `netlify.toml` (`base = "frontend"`, `publish = "dist"`).
+   - Sambungkan repositori GitHub ke Netlify.
+   - Tambahkan **Environment Variable** di dashboard Netlify:
+     ```text
+     VITE_API_BASE_URL=https://url-backend-anda.onrender.com
+     ```
+   - Trigger **Deploy site** (atau **Clear cache and deploy site** setelah mengubah environment variable).
+

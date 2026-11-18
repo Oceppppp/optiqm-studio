@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: optiqm-studio-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install --upgrade pip && pip install .
+    startCommand: uvicorn optiqm.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
