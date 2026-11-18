@@ -7,17 +7,40 @@ function apiUrl(path: string): string {
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
+  const contentType = res.headers.get("content-type") ?? "";
+  const text = await res.text();
+  const isHtml = !contentType.includes("application/json") && text.trimStart().startsWith("<");
+
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) msg = String(body.detail);
-    } catch {
-      // keep status
+    if (!isHtml) {
+      try {
+        const body = JSON.parse(text);
+        if (body?.detail) msg = String(body.detail);
+      } catch {
+        // keep status
+      }
+    } else if (!API_BASE) {
+      msg =
+        "Backend API belum terhubung (VITE_API_BASE_URL belum diisi). Deploy folder backend/ ke Render/Railway lalu isi Environment Variable VITE_API_BASE_URL di Netlify dan redeploy.";
+    } else {
+      msg = `Backend (${API_BASE}) mengembalikan HTML (HTTP ${res.status}), bukan JSON. Pastikan URL VITE_API_BASE_URL benar dan server backend aktif.`;
     }
     throw new Error(msg);
   }
-  return res.json() as Promise<T>;
+
+  if (isHtml) {
+    if (!API_BASE) {
+      throw new Error(
+        "Backend API belum terhubung (VITE_API_BASE_URL belum diisi). Deploy folder backend/ ke Render/Railway lalu isi Environment Variable VITE_API_BASE_URL di Netlify dan redeploy."
+      );
+    }
+    throw new Error(
+      `Respons dari ${API_BASE} berupa HTML, bukan JSON. Pastikan URL VITE_API_BASE_URL mengarah ke server backend FastAPI yang aktif.`
+    );
+  }
+
+  return JSON.parse(text) as T;
 }
 
 export async function fetchModules(): Promise<ModuleMeta[]> {
