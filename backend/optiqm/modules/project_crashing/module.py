@@ -110,8 +110,12 @@ class ProjectCrashing(BaseModule):
             nm = str(df.at[i, c_act]).strip()
             nt, ct = to_float(df.at[i, c_nt], f"NT {nm}"), to_float(df.at[i, c_ct], f"CT {nm}")
             nc, cc = to_float(df.at[i, c_nc], f"NC {nm}"), to_float(df.at[i, c_cc], f"CC {nm}")
+            if nt < 0 or ct < 0 or nc < 0 or cc < 0:
+                raise InputError(f"Waktu dan biaya pada aktivitas '{nm}' tidak boleh negatif.")
             if ct > nt:
                 raise InputError(f"Crash_Time '{nm}' tidak boleh lebih besar dari Normal_Time.")
+            if cc < nc - 1e-9:
+                raise InputError(f"Crash_Cost '{nm}' ({cc:g}) tidak boleh lebih kecil dari Normal_Cost ({nc:g}).")
             items.append(CrashItem(nm, parse_preds(df.at[i, c_pred]) if c_pred else [], nt, ct, nc, cc))
 
         norm_res = solve_cpm_pert([Activity(it.name, it.preds, it.normal_t) for it in items])
@@ -124,9 +128,10 @@ class ProjectCrashing(BaseModule):
         y, total_cost = solve_crashing_lp(items, target)
         normal_total = sum(it.normal_c for it in items)
         crash_added = total_cost - normal_total
+        eff_dur = min(target, normal_dur)
 
         r = ModuleResult()
-        r.metric("Durasi Target", min(target, normal_dur), highlight=True)
+        r.metric("Durasi Target", eff_dur, highlight=True)
         r.metric("Total Biaya Setelah Crash", total_cost, highlight=True)
         r.metric("Tambahan Biaya Crash", crash_added)
         r.metric("Durasi Normal / Min", f"{normal_dur:g} / {min_dur:g}")
@@ -136,13 +141,63 @@ class ProjectCrashing(BaseModule):
                 [[it.name, it.normal_t, it.crash_t, it.slope, y[i], it.normal_t - y[i], y[i] * it.slope]
                  for i, it in enumerate(items)])
 
-        # Kurva Trade-off Waktu vs Biaya
-        durs = sorted({round(d, 4) for d in [normal_dur, *[normal_dur - k for k in range(1, int(normal_dur - min_dur) + 1)], min_dur]})
+        # Kurva Trade-off Waktu vs Biaya (dibatasi maks 25 titik agar tetap responsif untuk rentang besar)
+        span = normal_dur - min_dur
+        if span <= 1e-9:
+            durs = [round(normal_dur, 4)]
+        elif span <= 24:
+            durs = sorted({round(d, 4) for d in [normal_dur, *[normal_dur - k for k in range(1, int(span) + 1)], min_dur]})
+        else:
+            durs = sorted({round(float(d), 4) for d in np.linspace(min_dur, normal_dur, 25)})
         trade_costs = [solve_crashing_lp(items, d)[1] for d in durs]
         r.chart("Kurva Trade-off Durasi vs Total Biaya", "line", {
             "x": [f"{d:g}" for d in durs],
             "series": [{"name": "Total Biaya Proyek", "data": trade_costs}],
             "x_label": "Durasi Proyek", "y_label": "Total Biaya",
         })
-        r.interpretation = f"Mempercepat proyek dari {normal_dur:g} menjadi {min(target, normal_dur):g} membutuhkan tambahan biaya {crash_added:,.2f} (total {total_cost:,.2f})."
+        r.interpretation = f"Mempercepat proyek dari {normal_dur:g} menjadi {eff_dur:g} membutuhkan tambahan biaya {crash_added:,.2f} (total {total_cost:,.2f})."
+
+        # Analisis mendalam
+        saved_t = max(0.0, normal_dur - eff_dur)
+        avg_marginal = (crash_added / saved_t) if saved_t > 1e-9 else 0.0
+        crashed = [(items[i], float(y[i]), float(y[i] * items[i].slope)) for i in range(len(items)) if y[i] > 1e-6]
+        post_res = solve_cpm_pert([Activity(it.name, it.preds, it.normal_t - float(y[i])) for i, it in enumerate(items)])
+        r.analyze(
+            "Metodologi Optimasi Crashing via Linear Programming",
+            "Model LP meminimalkan Σ(Slope_i × y_i) terhadap seluruh hubungan presedensi jaringan sehingga secara otomatis "
+            "menangani kemunculan jalur kritis paralel baru saat durasi dipangkas.",
+            [
+                f"Durasi Normal = {normal_dur:g} (biaya {normal_total:,.2f}) → Target = {eff_dur:g} (penghematan {saved_t:g} periode, batas crash fisik = {min_dur:g}).",
+                f"Tambahan Biaya Crash = {crash_added:,.2f} (+{(crash_added / normal_total * 100.0) if normal_total > 0 else 0.0:.2f}% dari biaya normal); "
+                f"biaya marjinal rata-rata = {avg_marginal:,.2f} per periode percepatan.",
+            ],
+        )
+
+        crash_bullets = [
+            f"Aktivitas '{it.name}': dipercepat {yi:g} periode (dari {it.normal_t:g} → {it.normal_t - yi:g}, slope {it.slope:,.2f}/periode, subtotal {ci:,.2f}"
+            + (", mencapai batas crash maksimal)." if abs(yi - it.max_crash) < 1e-6 else ").")
+            for it, yi, ci in crashed
+        ] or ["Tidak ada aktivitas yang perlu di-crash karena durasi target sudah ≥ durasi normal."]
+        crash_bullets.append(
+            f"Setelah crashing, terdapat {len(post_res['crit_paths'])} jalur kritis aktif pada durasi {post_res['duration']:g}: "
+            + " | ".join(" → ".join(cp) for cp in post_res["crit_paths"][:3]) + "."
+        )
+        r.analyze(
+            "Bedah Aktivitas Dipercepat & Jalur Kritis Pasca-Crashing",
+            "Percepatan yang baik memilih aktivitas kritis dengan biaya/periode terendah dan menghindari pemborosan crash pada aktivitas non-kritis:",
+            crash_bullets,
+        )
+
+        rec_bullets = [
+            f"Crashing menuju durasi {eff_dur:g} layak secara ekonomis apabila biaya tidak langsung (overhead/denda keterlambatan) melebihi {avg_marginal:,.2f} per periode."
+        ]
+        if eff_dur > min_dur + 1e-6:
+            max_cost = trade_costs[0]
+            rec_bullets.append(
+                f"Masih tersedia ruang percepatan tambahan sebesar {eff_dur - min_dur:g} periode lagi menuju durasi crash penuh ({min_dur:g}) "
+                f"dengan tambahan biaya ekstra {max_cost - total_cost:,.2f}."
+            )
+        else:
+            rec_bullets.append("Proyek sudah berada pada batas crash fisik minimum; percepatan lebih lanjut memerlukan perubahan metode kerja atau desain jaringan.")
+        r.analyze("Rekomendasi Trade-off Waktu vs Biaya", "Dasar pengambilan keputusan anggaran percepatan:", rec_bullets)
         return r

@@ -24,6 +24,8 @@ def weighted_moving_average(y: list[float], weights: list[float]) -> tuple[list[
     if k < 1 or k > len(y):
         raise InputError(f"Jumlah bobot ({k}) harus antara 1 dan {len(y)}.")
     w = np.array(weights, dtype=float)
+    if (w < 0).any():
+        raise InputError("Semua bobot WMA harus bernilai ≥ 0.")
     if abs(w.sum()) < 1e-12:
         raise InputError("Total bobot tidak boleh 0.")
     w = w / w.sum()
@@ -49,8 +51,6 @@ def trend_adjusted_exp(y: list[float], alpha: float, beta: float,
     T = float(t0)
     fit: list[float | None] = [F + T]
     for i in range(1, len(y)):
-        prev_fit = fit[-1]
-        F_new = alpha * y[i - 1] + (1.0 - alpha) * (F + T) if False else None  # update after observing y[i-1]
         # Standar Holt / Heizer-Render: F_t = a*A_{t-1} + (1-a)*(F_{t-1}+T_{t-1}), T_t = b*(F_t - F_{t-1}) + (1-b)*T_{t-1}
         F_prev = F
         F = alpha * y[i - 1] + (1.0 - alpha) * (F_prev + T)
@@ -86,11 +86,15 @@ def seasonal_multiplicative(y: list[float], season_len: int) -> dict:
     if season_len < 2 or n < season_len:
         raise InputError("Panjang musim minimal 2 dan jumlah data >= panjang musim.")
     overall_avg = float(np.mean(y))
+    if overall_avg <= 1e-12:
+        raise InputError("Metode musiman multiplikatif membutuhkan rata-rata permintaan bernilai positif (> 0).")
     # Indeks musiman rata-rata per posisi musim (metode rata-rata sederhana ala POM-QM)
     buckets = [[] for _ in range(season_len)]
     for i, val in enumerate(y):
         buckets[i % season_len].append(val)
-    raw_idx = [float(np.mean(b)) / overall_avg if overall_avg > 1e-12 else 1.0 for b in buckets]
+    raw_idx = [float(np.mean(b)) / overall_avg for b in buckets]
+    if any(v <= 1e-12 for v in raw_idx):
+        raise InputError("Setiap posisi musim harus memiliki rata-rata permintaan positif (> 0) untuk model multiplikatif.")
     norm_factor = season_len / sum(raw_idx)
     indices = [v * norm_factor for v in raw_idx]
 

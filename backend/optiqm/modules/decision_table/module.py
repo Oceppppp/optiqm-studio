@@ -83,7 +83,12 @@ class DecisionTable(BaseModule):
         ]
 
         r = ModuleResult()
+        emv = eol = None
+        best_i = None
+        evwpi = evpi = None
         if probs is not None:
+            if (probs < 0).any():
+                raise InputError("Nilai probabilitas tidak boleh negatif.")
             if abs(probs.sum() - 1.0) > 1e-3:
                 raise InputError(f"Jumlah probabilitas harus = 1 (saat ini {probs.sum():.4f}).")
             emv = M @ probs
@@ -104,18 +109,82 @@ class DecisionTable(BaseModule):
         r.table("Ringkasan Kriteria Keputusan", ["Kriteria", "Alternatif Terbaik", "Nilai"], crit_rows)
         alt_cols = ["Alternatif", "Min", "Max", "Laplace", f"Hurwicz ({alpha:g})", "Max Regret"]
         alt_tbl = [[alts[i], row_min[i], row_max[i], laplace[i], hurwicz[i], max_regret[i]] for i in range(len(alts))]
-        if probs is not None:
+        if probs is not None and emv is not None and eol is not None:
             alt_cols.extend(["EMV", "EOL"])
             for i in range(len(alts)):
-                alt_tbl[i].extend([float((M @ probs)[i]), float((regret @ probs)[i])])
+                alt_tbl[i].extend([float(emv[i]), float(eol[i])])
         r.table("Evaluasi per Alternatif", alt_cols, alt_tbl)
         r.table("Tabel Opportunity Loss (Regret)", ["Alternatif", *states, "Max Regret"],
                 [[alts[i], *regret[i].tolist(), max_regret[i]] for i in range(len(alts))])
-        if probs is not None:
+        if probs is not None and emv is not None:
             r.chart("Perbandingan EMV Alternatif", "bar", {
-                "x": alts, "series": [{"name": "EMV", "data": (M @ probs).tolist()}],
+                "x": alts, "series": [{"name": "EMV", "data": emv.tolist()}],
                 "x_label": "Alternatif", "y_label": "EMV",
             })
-        r.interpretation = (f"Berdasarkan EMV, alternatif terbaik adalah '{alts[pick(M @ probs)]}' (EMV={float((M @ probs).max() if is_profit else (M @ probs).min()):,.2f})."
-                            if probs is not None else f"Berdasarkan Minimax Regret, pilih '{alts[int(np.argmin(max_regret))]}'.")
+        r.interpretation = (f"Berdasarkan EMV, alternatif terbaik adalah '{alts[best_i]}' (EMV={float(emv[best_i]):,.2f})."
+                            if probs is not None and emv is not None and best_i is not None
+                            else f"Berdasarkan Minimax Regret, pilih '{alts[int(np.argmin(max_regret))]}'.")
+
+        # Analisis mendalam
+        # Cek dominansi
+        dominated = []
+        for i in range(len(alts)):
+            for j in range(len(alts)):
+                if i == j:
+                    continue
+                better_eq = (M[j] >= M[i]).all() if is_profit else (M[j] <= M[i]).all()
+                strictly = (M[j] > M[i]).any() if is_profit else (M[j] < M[i]).any()
+                if better_eq and strictly:
+                    dominated.append(f"'{alts[i]}' terdominasi oleh '{alts[j]}'")
+                    break
+
+        votes: dict[str, int] = {}
+        for row in crit_rows:
+            votes[row[1]] = votes.get(row[1], 0) + 1
+        top_vote_alt, top_votes = max(votes.items(), key=lambda x: x[1])
+        r.analyze(
+            "Metodologi Keputusan di Bawah Ketidakpastian & Risiko",
+            f"Tabel mengevaluasi {len(alts)} alternatif terhadap {len(states)} kondisi alam ({', '.join(states)}) "
+            f"dengan tipe nilai '{'Profit (maksimasi)' if is_profit else 'Cost (minimasi)'}' menggunakan {len(crit_rows)} kriteria keputusan.",
+            [
+                f"Konsensus Kriteria: '{top_vote_alt}' paling sering terpilih ({top_votes} dari {len(crit_rows)} kriteria).",
+                f"Uji Dominansi: {'; '.join(dominated) if dominated else 'Tidak ada alternatif yang terdominasi ketat (semua alternatif efisien Pareto pada minimal satu kondisi).'}",
+            ],
+        )
+
+        detail_bullets = [
+            f"Profil Optimis (Maximax/Minimin) memilih '{crit_rows[0][1]}' ({crit_rows[0][2]:,.2f}), "
+            f"sedangkan profil Konservatif/Pesimis (Maximin/Minimax) memilih '{crit_rows[1][1]}' ({crit_rows[1][2]:,.2f}).",
+            f"Kriteria Minimax Regret memilih '{crit_rows[4][1]}' untuk membatasi penyesalan maksimum maksimal sebesar {crit_rows[4][2]:,.2f}.",
+        ]
+        if probs is not None and emv is not None and eol is not None and best_i is not None and evwpi is not None and evpi is not None:
+            sorted_emv = sorted(range(len(alts)), key=lambda i: emv[i], reverse=is_profit)
+            margin_txt = (
+                f"unggul {abs(float(emv[sorted_emv[0]] - emv[sorted_emv[1]])):,.2f} dari runner-up '{alts[sorted_emv[1]]}'"
+                if len(alts) > 1 else ""
+            )
+            detail_bullets.append(
+                f"Dengan probabilitas kondisi ({', '.join(f'{s}:{pr:.2g}' for s, pr in zip(states, probs))}), "
+                f"EMV terbaik adalah '{alts[best_i]}' = {float(emv[best_i]):,.2f} ({margin_txt})."
+            )
+            detail_bullets.append(
+                f"Verifikasi EVPI = Min EOL: EVwPI ({evwpi:,.2f}) − EMV* ({float(emv[best_i]):,.2f}) = {evpi:,.2f} ≡ Min EOL ({float(eol.min()):,.2f})."
+            )
+        r.analyze(
+            "Bedah Profil Risiko & Nilai Informasi Sempurna (EVPI)",
+            "Perbedaan pilihan antar kriteria mencerminkan sensitivitas keputusan terhadap sikap risiko (risk-seeking vs risk-averse):",
+            detail_bullets,
+        )
+
+        rec_bullets = []
+        if probs is not None and best_i is not None and evpi is not None:
+            rec_bullets.append(f"Untuk pengambil keputusan netral risiko (risk-neutral), pilih '{alts[best_i]}' karena memaksimalkan nilai ekspektasi jangka panjang (EMV).")
+            rec_bullets.append(
+                f"Batas atas anggaran riset/konsultasi pasar: JANGAN membayar lebih dari EVPI = {evpi:,.2f} untuk informasi tambahan "
+                "karena bahkan ramalan sempurna tidak bisa menambah nilai ekspektasi melebihi angka tersebut."
+            )
+        else:
+            rec_bullets.append(f"Tanpa probabilitas historis, gunakan '{crit_rows[2][1]}' (Hurwicz α={alpha:g}) atau '{crit_rows[4][1]}' (Minimax Regret) sesuai toleransi risiko manajemen.")
+            rec_bullets.append("Kumpulkan estimasi probabilitas kondisi pasar dan tambahkan baris 'Probability' untuk membuka analisis EMV dan EVPI.")
+        r.analyze("Rekomendasi Pengambilan Keputusan", "Panduan eksekusi keputusan berdasarkan profil risiko:", rec_bullets)
         return r

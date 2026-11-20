@@ -14,6 +14,7 @@ def _evaluate_order(jobs: list[tuple[str, float, float]], order: list[int]) -> d
     tot_flow = 0.0
     tot_proc = sum(p for _, p, _ in jobs)
     tot_late = 0.0
+    max_late = 0.0
     tardy = 0
     gantt = []
     for idx in order:
@@ -23,6 +24,7 @@ def _evaluate_order(jobs: list[tuple[str, float, float]], order: list[int]) -> d
         late = max(0.0, finish - due)
         if late > 1e-9:
             tardy += 1
+        max_late = max(max_late, late)
         tot_flow += finish
         tot_late += late
         rows.append([nm, proc, due, start, finish, late])
@@ -34,8 +36,24 @@ def _evaluate_order(jobs: list[tuple[str, float, float]], order: list[int]) -> d
     return {
         "rows": rows, "gantt": gantt, "avg_completion": tot_flow / n,
         "utilization": util, "avg_jobs": avg_jobs, "avg_lateness": tot_late / n,
-        "tardy": tardy, "makespan": t,
+        "max_lateness": max_late, "tardy": tardy, "makespan": t,
     }
+
+
+def _dynamic_cr_order(jobs: list[tuple[str, float, float]]) -> list[int]:
+    """Dynamic Critical Ratio: pada setiap langkah t, pilih pekerjaan dengan CR = (Due - t) / Proc terkecil."""
+    rem = list(range(len(jobs)))
+    order: list[int] = []
+    t = 0.0
+    while rem:
+        pick = min(
+            rem,
+            key=lambda i: (((jobs[i][2] - t) / jobs[i][1]) if jobs[i][1] > 0 else float("inf"), i),
+        )
+        order.append(pick)
+        rem.remove(pick)
+        t += jobs[pick][1]
+    return order
 
 
 @register
@@ -81,7 +99,7 @@ class JobShopScheduling(BaseModule):
             "spt": sorted(range(n), key=lambda i: (jobs[i][1], i)),
             "lpt": sorted(range(n), key=lambda i: (-jobs[i][1], i)),
             "edd": sorted(range(n), key=lambda i: (jobs[i][2], i)),
-            "cr": sorted(range(n), key=lambda i: (jobs[i][2] / jobs[i][1] if jobs[i][1] > 0 else float("inf"), i)),
+            "cr": _dynamic_cr_order(jobs),
         }
         all_eval = {k: _evaluate_order(jobs, ord_) for k, ord_ in orders.items()}
         chosen = all_eval[p["rule"]]
@@ -97,10 +115,43 @@ class JobShopScheduling(BaseModule):
                 ["Job", "Waktu Proses", "Due Date", "Mulai", "Selesai (Flow Time)", "Keterlambatan"],
                 chosen["rows"])
         r.table("Perbandingan Semua Aturan",
-                ["Aturan", "Rata-rata Completion", "Utilisasi (%)", "Rata-rata Job", "Rata-rata Lateness", "Job Terlambat"],
-                [[k.upper(), ev["avg_completion"], ev["utilization"], ev["avg_jobs"], ev["avg_lateness"], ev["tardy"]]
+                ["Aturan", "Rata-rata Completion", "Utilisasi (%)", "Rata-rata Job", "Rata-rata Lateness", "Maks. Lateness", "Job Terlambat"],
+                [[k.upper(), ev["avg_completion"], ev["utilization"], ev["avg_jobs"], ev["avg_lateness"], ev["max_lateness"], ev["tardy"]]
                  for k, ev in all_eval.items()])
         r.chart(f"Gantt Chart — Aturan {p['rule'].upper()}", "gantt", {"tasks": chosen["gantt"]})
         r.interpretation = (f"Urutan {p['rule'].upper()}: {' → '.join(row[0] for row in chosen['rows'])} "
                             f"(rata-rata waktu selesai {chosen['avg_completion']:.2f}, utilisasi {chosen['utilization']:.1f}%).")
+
+        # Analisis mendalam
+        best_flow = min(all_eval.items(), key=lambda kv: kv[1]["avg_completion"])
+        best_late = min(all_eval.items(), key=lambda kv: (kv[1]["avg_lateness"], kv[1]["max_lateness"]))
+        best_max_late = min(all_eval.items(), key=lambda kv: kv[1]["max_lateness"])
+        r.analyze(
+            "Metodologi Penjadwalan 1 Mesin (Priority Dispatching Rules)",
+            f"Total waktu proses (Makespan) konstan = {chosen['makespan']:g} untuk seluruh urutan ({n} pekerjaan). "
+            "Aturan Critical Ratio (CR) dihitung secara dinamis pada setiap waktu selesai pekerjaan: CR_i(t) = (Due_i − t) / Proc_i.",
+            [
+                f"Aturan aktif {p['rule'].upper()}: urutan {' → '.join(row[0] for row in chosen['rows'])}, rata-rata waktu penyelesaian = {chosen['avg_completion']:.2f}, "
+                f"utilisasi = {chosen['utilization']:.2f}%, rata-rata WIP = {chosen['avg_jobs']:.2f} job.",
+                f"Kinerja Ketepatan Waktu: {chosen['tardy']} dari {n} job terlambat, rata-rata keterlambatan = {chosen['avg_lateness']:.2f}, maksimum = {chosen['max_lateness']:.2f}.",
+            ],
+        )
+        r.analyze(
+            "Bedah Trade-off Antar Aturan Prioritas",
+            "Tidak ada satu aturan yang unggul di semua indikator secara bersamaan — pilihan bergantung pada tujuan operasi:",
+            [
+                f"Terbaik untuk Flow Time, Utilisasi & WIP: {best_flow[0].upper()} (rata-rata selesai {best_flow[1]['avg_completion']:.2f}, WIP {best_flow[1]['avg_jobs']:.2f}). Secara matematis SPT selalu meminimalkan rata-rata waktu selesai.",
+                f"Terbaik untuk Keterlambatan Maksimum: {best_max_late[0].upper()} (maks. lateness {best_max_late[1]['max_lateness']:.2f}). Secara matematis EDD selalu meminimalkan keterlambatan maksimum.",
+                f"Terbaik untuk Rata-rata Keterlambatan: {best_late[0].upper()} (avg lateness {best_late[1]['avg_lateness']:.2f}, {best_late[1]['tardy']} job terlambat).",
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Pemilihan Aturan",
+            "Panduan memilih aturan dispatching di lantai produksi:",
+            [
+                "Gunakan SPT bila prioritas utama adalah memaksimalkan throughput, meminimalkan antrean kerja (WIP), dan menjaga utilisasi tetap tinggi.",
+                "Gunakan EDD atau Critical Ratio (CR) dinamis bila penalti keterlambatan due date / kontrak SLA pelanggan sangat mahal.",
+                "Hindari LPT untuk pekerjaan ber-due date ketat karena cenderung menunda pekerjaan pendek dan meningkatkan WIP.",
+            ],
+        )
         return r

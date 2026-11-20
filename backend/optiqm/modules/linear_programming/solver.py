@@ -40,7 +40,7 @@ def normalize_sign(sign: object, row: str) -> str:
     return SIGNS[s]
 
 
-def solve_lp(p: LPProblem) -> LPSolution:
+def solve_lp(p: LPProblem, bounds: list[tuple[float | None, float | None]] | None = None) -> LPSolution:
     sense = -1.0 if p.maximize else 1.0
     A_ub, b_ub, A_eq, b_eq, ub_idx, eq_idx = [], [], [], [], [], []
     for i, s in enumerate(p.signs):
@@ -55,7 +55,7 @@ def solve_lp(p: LPProblem) -> LPSolution:
         sense * p.c,
         A_ub=np.array(A_ub) if A_ub else None, b_ub=np.array(b_ub) if b_ub else None,
         A_eq=np.array(A_eq) if A_eq else None, b_eq=np.array(b_eq) if b_eq else None,
-        bounds=[(0, None)] * len(p.c), method="highs",
+        bounds=bounds if bounds is not None else [(0, None)] * len(p.c), method="highs",
     )
     if res.status == 2:
         raise SolverError("Masalah tidak memiliki solusi layak (infeasible).")
@@ -102,8 +102,10 @@ def feasible_region(p: LPProblem, x_opt: np.ndarray | None) -> dict:
         order = np.argsort(np.arctan2(P[:, 1] - center[1], P[:, 0] - center[0]))
         polygon = P[order].tolist()
 
-    xmax = max([pt[0] for pt in polygon] + [1.0]) * 1.4
-    ymax = max([pt[1] for pt in polygon] + [1.0]) * 1.4
+    opt_x = [float(x_opt[0])] if x_opt is not None else []
+    opt_y = [float(x_opt[1])] if x_opt is not None else []
+    xmax = max([pt[0] for pt in polygon] + opt_x + [1.0]) * 1.4
+    ymax = max([pt[1] for pt in polygon] + opt_y + [1.0]) * 1.4
     drawn = []
     for i, name in enumerate(p.constraint_names):
         a1, a2 = A[i]

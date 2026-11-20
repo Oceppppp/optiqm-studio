@@ -66,4 +66,38 @@ class CenterOfGravity(BaseModule):
             "x_label": "Koordinat X", "y_label": "Koordinat Y",
         })
         r.interpretation = f"Titik Center of Gravity berada di koordinat ({cx:,.2f}, {cy:,.2f})."
+
+        # Analisis mendalam
+        tot_w = float(ws.sum())
+        rect_weighted = float(sum((abs(x - cx) + abs(y - cy)) * w for x, y, w in zip(xs, ys, ws)))
+        avg_euc_dist = weighted_dist / tot_w if tot_w > 0 else 0.0
+        max_w_i = int(np.argmax(ws))
+        near_i = int(np.argmin(dists))
+        far_i = int(np.argmax(dists))
+        r.analyze(
+            "Metodologi Center of Gravity & Verifikasi Koordinat",
+            f"Koordinat pusat gravitasi dihitung sebagai rata-rata tertimbang posisi {len(names)} lokasi tujuan berdasarkan beban pengiriman (total beban ΣQ = {tot_w:,.2f}).",
+            [
+                f"Cx = Σ(X·Q) / ΣQ = {float((xs * ws).sum()):,.2f} / {tot_w:,.2f} = {cx:,.2f}.",
+                f"Cy = Σ(Y·Q) / ΣQ = {float((ys * ws).sum()):,.2f} / {tot_w:,.2f} = {cy:,.2f}.",
+                f"Total Jarak Berbobot Euclidean = {weighted_dist:,.2f} (rata-rata {avg_euc_dist:,.2f} satuan jarak/unit beban); Jarak Berbobot Rectilinear/Manhattan = {rect_weighted:,.2f}.",
+            ],
+        )
+        r.analyze(
+            "Analisis Tarikan Beban & Sebaran Jarak",
+            "Lokasi bervolume besar memiliki 'gravitasi' lebih kuat yang menarik titik pusat distribusi mendekatinya:",
+            [
+                f"Penarik beban dominan: '{names[max_w_i]}' dengan beban {ws[max_w_i]:,.2f} ({ws[max_w_i] / tot_w * 100:.1f}% dari total arus pengiriman).",
+                f"Lokasi terdekat dari pusat gravitasi: '{names[near_i]}' (jarak {dists[near_i]:,.2f} satuan).",
+                f"Lokasi terjauh dari pusat gravitasi: '{names[far_i]}' (jarak {dists[far_i]:,.2f} satuan, kontribusi jarak berbobot {dists[far_i] * ws[far_i]:,.2f}).",
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Pemilihan Lokasi Riil",
+            "Penerjemahan koordinat matematis ke lokasi fasilitas di lapangan:",
+            [
+                f"Jadikan koordinat ({cx:,.2f}, {cy:,.2f}) sebagai titik awal pencarian lahan gudang/pusat distribusi (terdekat dari '{names[near_i]}').",
+                "Karena metode Center of Gravity mengasumsikan jarak garis lurus dan tarif transportasi seragam, saring 2–3 lahan riil di sekitar koordinat ini yang memiliki akses tol/pelabuhan lalu evaluasi dengan Factor Rating dan Location Break-Even.",
+            ],
+        )
         return r

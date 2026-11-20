@@ -48,7 +48,9 @@ class Reliability(BaseModule):
             if not (0.0 <= rel <= 1.0):
                 raise InputError(f"Keandalan '{cmp_name}' harus antara 0 dan 1.")
             cnt = int(round(to_float(df.at[i, c_par]))) if c_par and not pd.isna(df.at[i, c_par]) else 1
-            for k in range(max(1, cnt)):
+            if cnt < 1:
+                raise InputError(f"Jumlah unit paralel pada '{cmp_name}' harus ≥ 1.")
+            for k in range(cnt):
                 stages.setdefault(stg, []).append((cmp_name if cnt == 1 else f"{cmp_name} #{k+1}", rel))
 
         stage_rows = []
@@ -71,4 +73,44 @@ class Reliability(BaseModule):
             "x_label": "Tahap", "y_label": "Reliability",
         })
         r.interpretation = f"Keandalan sistem total (seri dari {len(stages)} tahap) adalah {sys_rel:.6f} ({sys_rel*100:.2f}%)."
+
+        # Analisis mendalam
+        prod_expr = " × ".join(f"{row[4]:.4f}" for row in stage_rows)
+        weakest = min(stage_rows, key=lambda row: row[4])
+        strongest = max(stage_rows, key=lambda row: row[4])
+        r.analyze(
+            "Metodologi Keandalan Sistem Seri–Paralel",
+            f"Sistem terdiri dari {len(stages)} tahap seri. Di dalam setiap tahap, redundansi paralel meningkatkan keandalan via R_tahap = 1 − ∏(1 − R_i), "
+            "lalu seluruh tahap dikalikan secara seri: R_s = ∏ R_tahap.",
+            [
+                f"Verifikasi Perkalian Seri: R_s = {prod_expr} = {sys_rel:.6f} ({sys_rel * 100:.4f}%).",
+                f"Risiko Kegagalan Sistem (Unreliability): 1 − R_s = {(1.0 - sys_rel) * 100:.4f}% (ekspektasi 1 kegagalan setiap ≈ {(1.0 / (1.0 - sys_rel)) if sys_rel < 1.0 - 1e-12 else float('inf'):,.1f} siklus).",
+            ],
+        )
+
+        # Simulasi dampak menambahkan 1 unit backup identik pada tahap terlemah
+        w_stg_name = weakest[0]
+        w_comps = stages[w_stg_name]
+        rep_r = sum(rv for _, rv in w_comps) / len(w_comps)
+        new_w_rel = 1.0 - (1.0 - weakest[4]) * (1.0 - rep_r)
+        new_sys_rel = (sys_rel / weakest[4] * new_w_rel) if weakest[4] > 1e-12 else new_w_rel
+        gain_pp = (new_sys_rel - sys_rel) * 100.0
+        r.analyze(
+            "Identifikasi Mata Rantai Terlemah (Bottleneck Keandalan)",
+            "Dalam sistem seri, keandalan keseluruhan tidak pernah melebihi keandalan tahap terlemahnya:",
+            [
+                f"Tahap terlemah: '{w_stg_name}' ({weakest[2]}, R = {weakest[4]:.4f} atau peluang gagal {(1 - weakest[4]) * 100:.2f}%).",
+                f"Tahap terkuat: '{strongest[0]}' ({strongest[2]}, R = {strongest[4]:.4f}).",
+                f"Simulasi Redundansi (+1 unit backup R={rep_r:.3f} di '{w_stg_name}'): R_tahap naik dari {weakest[4]:.4f} → {new_w_rel:.4f}, "
+                f"mendongkrak R_sistem dari {sys_rel * 100:.2f}% → {new_sys_rel * 100:.2f}% (+{gain_pp:.2f} poin persentase).",
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Desain & Pemeliharaan",
+            "Prioritas rekayasa keandalan untuk menekan probabilitas kegagalan:",
+            [
+                f"Prioritaskan peningkatan kualitas komponen atau penambahan cadangan paralel pada '{w_stg_name}' karena memberikan dampak lonjakan keandalan sistem tertinggi.",
+                "Terapkan jadwal pemeliharaan preventif (PM) lebih rapat pada tahap tunggal tanpa redundansi karena kegagalan 1 komponen langsung menghentikan seluruh sistem.",
+            ],
+        )
         return r

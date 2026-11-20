@@ -13,22 +13,34 @@ from .sheet import ParamSpec
 _TRUE = {"1", "true", "yes", "ya", "y", "t"}
 
 
-def to_float(value: Any, what: str = "nilai") -> float:
-    """Konversi ke float; mendukung koma desimal ('1,5') dan persen ('10%')."""
+def to_float(value: Any, what: str = "nilai", allow_inf: bool = False) -> float:
+    """Konversi ke float; mendukung koma desimal ('1,5'), pemisah ribuan ('1,200.50' / '1.200,50'), dan persen ('10%')."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
         raise InputError(f"{what} kosong.")
     if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
-        return float(value)
+        f = float(value)
+        if np.isnan(f) or (not allow_inf and np.isinf(f)):
+            raise InputError(f"{what} '{value}' bukan angka berhingga yang valid.")
+        return f
     s = str(value).strip().replace(" ", "")
     pct = s.endswith("%")
     if pct:
         s = s[:-1]
-    if s.count(",") == 1 and s.count(".") == 0:
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif s.count(",") == 1 and s.count(".") == 0:
         s = s.replace(",", ".")
+    elif s.count(",") > 1 and s.count(".") == 0:
+        s = s.replace(",", "")
     try:
         f = float(s)
     except ValueError as exc:
         raise InputError(f"{what} '{value}' bukan angka.") from exc
+    if np.isnan(f) or (not allow_inf and np.isinf(f)):
+        raise InputError(f"{what} '{value}' bukan angka berhingga yang valid.")
     return f / 100 if pct else f
 
 

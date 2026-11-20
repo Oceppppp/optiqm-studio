@@ -27,4 +27,6 @@ class LocationBreakeven(BaseModule):
         return SheetData(params={"volume": 2000}, tables={"main": df})
 
     def solve(self, data: SheetData) -> ModuleResult:
-        return CostVolume().solve(data)
+        p = self.resolved_params(data)
+        merged = SheetData(params={**data.params, "volume": p["volume"]}, tables=data.tables)
+        return CostVolume().solve(merged, entity_label="lokasi")

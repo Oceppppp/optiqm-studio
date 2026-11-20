@@ -18,7 +18,9 @@ function formatCell(v: CellValue): string {
 
 export function ResultCard({ item, onInspectCase }: Props) {
   const [showSteps, setShowSteps] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(true);
   const res = item.result;
+  const analysis = res?.analysis ?? [];
 
   return (
     <article className="card">
@@ -60,6 +62,35 @@ export function ResultCard({ item, onInspectCase }: Props) {
             )}
 
             {res.interpretation && <div className="interpretation">{res.interpretation}</div>}
+
+            {analysis.length > 0 && (
+              <section className="analysis-panel">
+                <div className="analysis-header">
+                  <div>
+                    <div className="analysis-kicker">Analisis Mendalam</div>
+                    <div className="analysis-sub">Penjelasan metodologi, bedah hasil perhitungan, dan rekomendasi keputusan</div>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setShowAnalysis((s) => !s)}>
+                    {showAnalysis ? "Ciutkan" : `Tampilkan (${analysis.length})`}
+                  </button>
+                </div>
+                {showAnalysis && (
+                  <div className="analysis-sections">
+                    {analysis.map((sec, idx) => (
+                      <div key={idx} className="analysis-section">
+                        <h4 className="analysis-sec-title">{idx + 1}. {sec.title}</h4>
+                        {sec.content && <p className="analysis-sec-content">{sec.content}</p>}
+                        {sec.bullets.length > 0 && (
+                          <ul className="analysis-list">
+                            {sec.bullets.map((b, bi) => <li key={bi}>{b}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
 
             {res.charts.map((ch, idx) => <ChartRenderer key={idx} chart={ch} />)}
 

@@ -41,6 +41,8 @@ class QuantityDiscount(BaseModule):
         fixed_h = float(p["fixed_H"])
         if D <= 0 or S <= 0:
             raise InputError("D dan S harus > 0.")
+        if pct < 0 or fixed_h < 0:
+            raise InputError("Persentase biaya simpan dan biaya simpan tetap tidak boleh negatif.")
 
         df = clean_frame(data.table("main"))
         require_rows(df, 1, "Tabel tingkat diskon")
@@ -51,8 +53,14 @@ class QuantityDiscount(BaseModule):
         tiers = []
         for i in range(len(df)):
             mn = to_float(df.at[i, c_min], f"Min_Qty baris {i + 1}")
-            mx = to_float(df.at[i, c_max], f"Max_Qty baris {i + 1}") if c_max and not pd.isna(df.at[i, c_max]) else math.inf
+            raw_mx = df.at[i, c_max] if c_max else None
+            if raw_mx is None or pd.isna(raw_mx) or str(raw_mx).strip().lower() in {"", "inf", "∞", "unlimited", "-"}:
+                mx = math.inf
+            else:
+                mx = to_float(raw_mx, f"Max_Qty baris {i + 1}")
             pr = to_float(df.at[i, c_price], f"Price baris {i + 1}")
+            if mn < 0 or mx <= 0 or mx < mn or pr <= 0:
+                raise InputError(f"Baris tier {i + 1} tidak valid (pastikan 0 ≤ Min_Qty ≤ Max_Qty, Max_Qty > 0, dan Harga > 0).")
             tiers.append((mn, mx, pr))
         tiers.sort(key=lambda t: t[0])
 
@@ -63,24 +71,20 @@ class QuantityDiscount(BaseModule):
             if H <= 0:
                 raise InputError("Biaya simpan H tidak boleh <= 0.")
             q_raw = math.sqrt(2.0 * D * S / H)
-            if mn <= q_raw <= mx:
+            lo = max(1.0, mn)
+            if lo <= q_raw <= mx:
                 q_adj, status = q_raw, "Feasible (EOQ)"
-            elif q_raw < mn:
-                q_adj, status = max(1.0, mn), "Disesuaikan ke batas minimum"
+            elif q_raw < lo:
+                q_adj, status = lo, "Disesuaikan ke batas minimum"
             else:
-                q_adj, status = mx, "Melebihi batas maksimum"
+                q_adj, status = mx, "Disesuaikan ke batas maksimum"
             ord_c = (D / q_adj) * S
             hold_c = (q_adj / 2.0) * H
             pur_c = D * pr
             tot = ord_c + hold_c + pur_c
             rows_out.append([idx, f"{mn:g} – {'∞' if math.isinf(mx) else f'{mx:g}'}", pr, H, q_raw, q_adj, status, pur_c, ord_c, hold_c, tot])
-            if q_raw <= mx and (best is None or tot < best[0]):
-                best = (tot, q_adj, pr, idx)
-
-        if best is None:
-            # fallback pilih biaya terendah dari semua baris
-            best_row = min(rows_out, key=lambda r: r[-1])
-            best = (best_row[-1], best_row[5], best_row[2], best_row[0])
+            if best is None or tot < best[0]:
+                best = (tot, q_adj, pr, idx, pur_c, ord_c, hold_c)
 
         r = ModuleResult()
         r.metric("Total Biaya Minimum", best[0], highlight=True)
@@ -95,4 +99,45 @@ class QuantityDiscount(BaseModule):
             "x_label": "Tier Harga", "y_label": "Total Biaya Tahunan",
         })
         r.interpretation = f"Pilih Tier {best[3]} (harga {best[2]:g}) dengan order Q* = {best[1]:g} unit; total biaya tahunan = {best[0]:,.2f}."
+
+        # Analisis mendalam
+        base_row = rows_out[0]
+        last_row = rows_out[-1]
+        savings_vs_base = base_row[-1] - best[0]
+        r.analyze(
+            "Metodologi EOQ Diskon Kuantitas (All-Units Discount)",
+            f"Setiap dari {len(rows_out)} tingkat harga dihitung EOQ mentahnya Q = √(2DS/H), disesuaikan ke rentang kuantitas layak [Min, Max], "
+            "lalu dibandingkan Total Biaya Tahunan = (D×P) + (D/Q×S) + (Q/2×H).",
+            [
+                f"Solusi Optimal: Tier {best[3]} pada Q* = {best[1]:,.2f} unit (harga {best[2]:,.4g}/unit, {D / best[1]:,.2f} order/tahun).",
+                f"Komposisi Total Biaya ({best[0]:,.2f}): Pembelian = {best[4]:,.2f} ({best[4]/best[0]*100:.1f}%), "
+                f"Pesan = {best[5]:,.2f} ({best[5]/best[0]*100:.1f}%), Simpan = {best[6]:,.2f} ({best[6]/best[0]*100:.1f}%).",
+            ],
+        )
+
+        trade_bullets = [
+            f"Dibandingkan Tier 1 tanpa diskon ekstra (total {base_row[-1]:,.2f}): memilih Tier {best[3]} menghemat {savings_vs_base:,.2f}/tahun "
+            f"({(savings_vs_base / base_row[-1] * 100.0) if base_row[-1] > 0 else 0.0:.2f}%)."
+        ]
+        if best[3] != last_row[0]:
+            diff_last = last_row[-1] - best[0]
+            trade_bullets.append(
+                f"Mengapa Tier {last_row[0]} (harga termurah {last_row[2]:g}) TIDAK optimal? Meski biaya beli turun {best[4] - last_row[7]:,.2f}, "
+                f"lonjakan biaya simpan ({last_row[9] - best[6]:+,.2f}) lebih besar sehingga total biaya justru lebih mahal {diff_last:,.2f}/tahun."
+            )
+        else:
+            trade_bullets.append("Tier diskon tertinggi memberikan total biaya terendah karena penghematan harga beli melampaui tambahan biaya penyimpanan.")
+        r.analyze(
+            "Bedah Trade-off Harga Diskon vs Biaya Penyimpanan",
+            "Diskon kuantitas hanya menguntungkan bila penghematan harga pembelian dan frekuensi order lebih besar dari tambahan biaya simpan stok.",
+            trade_bullets,
+        )
+        r.analyze(
+            "Rekomendasi Pengadaan",
+            "Pertimbangan praktis sebelum mengeksekusi pembelian pada tingkat diskon terpilih:",
+            [
+                f"Pesan sebanyak {best[1]:,.0f} unit setiap kali order (rata-rata stok tersimpan {best[1] / 2.0:,.1f} unit).",
+                "Pastikan ruang gudang, modal kerja tunai, dan umur simpan (shelf-life) produk mampu menampung ukuran lot tersebut tanpa risiko rusak atau usang.",
+            ],
+        )
         return r

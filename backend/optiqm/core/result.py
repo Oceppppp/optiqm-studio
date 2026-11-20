@@ -106,6 +106,22 @@ class Chart:
 
 
 @dataclass
+class AnalysisSection:
+    """Satu blok analisis mendalam (metodologi, bedah hasil, atau rekomendasi)."""
+
+    title: str
+    content: str = ""
+    bullets: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "content": self.content,
+            "bullets": list(self.bullets),
+        }
+
+
+@dataclass
 class ModuleResult:
     """Hasil penyelesaian satu kasus."""
 
@@ -115,6 +131,7 @@ class ModuleResult:
     steps: list[Table] = field(default_factory=list)   # langkah/iterasi (mis. tabel simplex)
     warnings: list[str] = field(default_factory=list)
     interpretation: str = ""                            # ringkasan naratif hasil
+    analysis: list[AnalysisSection] = field(default_factory=list)  # analisis mendalam terstruktur
 
     # helper builder -------------------------------------------------------
     def metric(self, label: str, value: Any, unit: str = "", highlight: bool = False) -> "ModuleResult":
@@ -129,6 +146,10 @@ class ModuleResult:
         self.charts.append(Chart(title, kind, data))
         return self
 
+    def analyze(self, title: str, content: str = "", bullets: list[str] | None = None) -> "ModuleResult":
+        self.analysis.append(AnalysisSection(title=title, content=content, bullets=list(bullets or [])))
+        return self
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "summary": [m.to_dict() for m in self.summary],
@@ -137,4 +158,5 @@ class ModuleResult:
             "steps": [t.to_dict() for t in self.steps],
             "warnings": list(self.warnings),
             "interpretation": self.interpretation,
+            "analysis": [a.to_dict() for a in self.analysis],
         }

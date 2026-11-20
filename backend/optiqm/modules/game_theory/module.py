@@ -73,4 +73,61 @@ class GameTheory(BaseModule):
                 [[nm, out["q"][j], f"{out['q'][j] * 100:.2f}%"] for j, nm in enumerate(col_names)])
         r.interpretation = (f"Nilai permainan = {out['value']:,.4f} ({'Saddle Point' if out['pure'] else 'Mixed Strategy'}): "
                             f"Pemain A ({', '.join(f'{n}:{p*100:.1f}%' for n, p in zip(row_names, out['p']))}).")
+
+        # Analisis mendalam
+        maximin = float(M.min(axis=1).max())
+        minimax = float(M.max(axis=0).min())
+        v = float(out["value"])
+        fairness = (
+            "permainan ADIL (fair game, v = 0)" if abs(v) < 1e-7 else
+            f"menguntungkan Pemain Baris sebesar +{v:,.4f} per putaran" if v > 0 else
+            f"menguntungkan Pemain Kolom sebesar {abs(v):,.4f} per putaran"
+        )
+        r.analyze(
+            "Metodologi Teori Permainan Zero-Sum (Maximin–Minimax)",
+            f"Matriks payoff {M.shape[0]}×{M.shape[1]} dianalisis dengan prinsip Minimax (Teorema von Neumann). "
+            f"Batas bawah murni Maximin = {maximin:,.4f} dan batas atas murni Minimax = {minimax:,.4f}.",
+            [
+                f"Tipe Ekuilibrium: {'Pure Strategy (Saddle Point ditemukan karena Maximin = Minimax = ' + f'{v:,.4f})' if out['pure'] else f'Mixed Strategy (karena Maximin {maximin:g} < Minimax {minimax:g}, diselesaikan via Linear Programming)'}.",
+                f"Nilai Permainan (v = {v:,.4f}): {fairness}.",
+            ],
+        )
+
+        exp_a_vs_b = out["p"] @ M
+        exp_b_vs_a = M @ out["q"]
+        ver_bullets = [
+            "Payoff ekspektasi Pemain Baris (A) terhadap tiap strategi Pemain Kolom (B): "
+            + ", ".join(f"vs {col_names[j]} = {exp_a_vs_b[j]:,.4f}" for j in range(len(col_names)))
+            + f" (semuanya ≥ v = {v:,.4f}).",
+            "Ekspektasi pembayaran Pemain Kolom (B) terhadap tiap strategi Pemain Baris (A): "
+            + ", ".join(f"vs {row_names[i]} = {exp_b_vs_a[i]:,.4f}" for i in range(len(row_names)))
+            + f" (semuanya ≤ v = {v:,.4f}).",
+        ]
+        unused_a = [row_names[i] for i in range(len(row_names)) if out["p"][i] < 1e-6]
+        unused_b = [col_names[j] for j in range(len(col_names)) if out["q"][j] < 1e-6]
+        if unused_a or unused_b:
+            ver_bullets.append(
+                f"Strategi tidak digunakan (probabilitas 0%): Pemain Baris [{', '.join(unused_a) or '-'}], Pemain Kolom [{', '.join(unused_b) or '-'}]."
+            )
+        r.analyze(
+            "Verifikasi Ekuilibrium Nash & Payoff Ekspektasi",
+            "Pada titik ekuilibrium, tidak ada pemain yang dapat memperbaiki hasil ekspektasinya dengan menyimpang sepihak:",
+            ver_bullets,
+        )
+
+        if out["pure"]:
+            i0, j0 = out["saddle"]
+            rec_bullets = [
+                f"Saddle Point stabil pada ({row_names[i0]}, {col_names[j0]}): kedua pemain sebaiknya konsisten memainkan strategi murni tersebut.",
+                "Menyimpang dari Saddle Point hanya akan memberi keuntungan tambahan kepada lawan.",
+            ]
+        else:
+            rec_bullets = [
+                "Pemain Baris (A) harus mengacak pilihan secara independen sesuai proporsi: "
+                + ", ".join(f"{n} ({p*100:.1f}%)" for n, p in zip(row_names, out["p"]) if p > 1e-6) + ".",
+                "Pemain Kolom (B) harus mengacak pilihan sesuai proporsi: "
+                + ", ".join(f"{n} ({q*100:.1f}%)" for n, q in zip(col_names, out["q"]) if q > 1e-6) + ".",
+                "Kunci keberhasilan strategi campuran adalah kerahasiaan/pengacakan di setiap putaran agar lawan tidak bisa memprediksi langkah berikutnya.",
+            ]
+        r.analyze("Rekomendasi Strategi Kompetitif", "Panduan eksekusi di lapangan:", rec_bullets)
         return r

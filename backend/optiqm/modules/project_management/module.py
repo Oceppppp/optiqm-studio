@@ -62,6 +62,8 @@ class ProjectManagement(BaseModule):
                 a = to_float(df.at[i, c_opt], f"Optimistic {nm}")
                 m = to_float(df.at[i, c_ml], f"Most_Likely {nm}")
                 b = to_float(df.at[i, c_pes], f"Pessimistic {nm}")
+                if a < 0 or not (a <= m <= b):
+                    raise InputError(f"Estimasi PERT pada '{nm}' harus memenuhi 0 ≤ Optimistic ({a:g}) ≤ Most_Likely ({m:g}) ≤ Pessimistic ({b:g}).")
                 t = (a + 4.0 * m + b) / 6.0
                 var = ((b - a) / 6.0) ** 2
             else:
@@ -83,6 +85,10 @@ class ProjectManagement(BaseModule):
             r.metric("Std. Deviasi Jalur Kritis", out["std"])
         if out["prob"] is not None:
             r.metric(f"P(Selesai ≤ {target:g})", f"{out['prob'] * 100:.2f}%")
+        if len(out["crit_paths"]) > 1:
+            r.warnings.append(
+                f"Terdapat {len(out['crit_paths'])} jalur kritis paralel; keterlambatan pada salah satu jalur akan langsung menunda proyek."
+            )
 
         rows_out = []
         for nm in out["order"]:
@@ -116,4 +122,60 @@ class ProjectManagement(BaseModule):
                       for nm in out["order"]],
         })
         r.interpretation = f"Durasi proyek = {out['duration']:,.2f} dengan jalur kritis {path_str}."
+
+        # Analisis mendalam
+        mode_lbl = "PERT (3-Point Beta: t = (a + 4m + b)/6, σ² = ((b−a)/6)²)" if is_pert else "CPM (Deterministik)"
+        all_paths_txt = " | ".join(" → ".join(cp) for cp in out["crit_paths"][:4])
+        r.analyze(
+            "Metodologi Forward/Backward Pass & Jalur Kritis",
+            f"Jaringan Activity-on-Node (AON) berjumlah {len(acts)} aktivitas dianalisis dengan metode {mode_lbl}. "
+            "Forward pass menentukan ES/EF, backward pass menentukan LS/LF, dan aktivitas dengan Slack = LS − ES = 0 membentuk jalur kritis.",
+            [
+                f"Durasi ekspektasi proyek = {out['duration']:,.2f} satuan waktu; {len(crit)} dari {len(acts)} aktivitas ({len(crit)/len(acts)*100:.1f}%) bersifat kritis (Slack = 0).",
+                f"Jalur kritis teridentifikasi ({len(out['crit_paths'])} jalur): {all_paths_txt}.",
+            ],
+        )
+
+        non_crit = sorted([(out["slack"][nm], nm) for nm in out["order"] if nm not in crit])
+        risk_bullets: list[str] = []
+        if non_crit:
+            tight_sl, tight_nm = non_crit[0]
+            max_sl, max_nm = non_crit[-1]
+            risk_bullets.append(
+                f"Aktivitas non-kritis paling ketat (near-critical): '{tight_nm}' dengan Slack hanya {tight_sl:,.2f} — "
+                "keterlambatan melebihi batas ini akan memunculkan jalur kritis baru."
+            )
+            risk_bullets.append(f"Aktivitas paling fleksibel: '{max_nm}' dengan Slack = {max_sl:,.2f} (sumber daya dapat dipinjam sementara jika dibutuhkan jalur kritis).")
+        else:
+            risk_bullets.append("Seluruh aktivitas bersifat kritis (tidak ada kelonggaran/slack di seluruh jaringan).")
+
+        if is_pert:
+            top_var_act = max(acts, key=lambda a: a.variance)
+            ci_lo = max(0.0, out["duration"] - 1.96 * out["std"])
+            ci_hi = out["duration"] + 1.96 * out["std"]
+            risk_bullets.append(
+                f"Ketidakpastian PERT: varians jalur kritis = {out['variance']:,.3f}, std. deviasi σ = {out['std']:,.3f}; "
+                f"rentang keyakinan 95% penyelesaian proyek berada di [{ci_lo:,.2f}, {ci_hi:,.2f}]."
+            )
+            risk_bullets.append(f"Sumber ketidakpastian terbesar: aktivitas '{top_var_act.name}' (varians = {top_var_act.variance:,.3f}).")
+            if out["prob"] is not None and target is not None:
+                z_txt = f"Z = {out['z']:+.3f}" if out["z"] is not None else "deterministik"
+                risk_bullets.append(
+                    f"Peluang selesai ≤ target {target:g} ({z_txt}) = {out['prob'] * 100:.2f}% "
+                    f"({'sangat aman' if out['prob'] >= 0.9 else ('cukup moderat' if out['prob'] >= 0.7 else 'risiko terlambat tinggi')})."
+                )
+        r.analyze(
+            "Bedah Kelonggaran (Slack) & Risiko Ketidakpastian Jadwal",
+            "Identifikasi aktivitas hampir kritis dan variabilitas durasi membantu manajer proyek memfokuskan mitigasi sebelum keterlambatan terjadi:",
+            risk_bullets,
+        )
+
+        rec_bullets = [
+            f"Terapkan pemantauan harian ketat pada aktivitas jalur kritis ({', '.join(nm for nm in out['order'] if nm in crit)}) karena setiap 1 satuan keterlambatan langsung memundurkan tanggal selesai proyek."
+        ]
+        if is_pert and out["prob"] is not None and out["prob"] < 0.85:
+            rec_bullets.append("Peluang memenuhi target waktu masih di bawah 85%: pertimbangkan percepatan (Project Crashing) pada aktivitas kritis termurah atau tambahkan buffer waktu.")
+        if non_crit:
+            rec_bullets.append(f"Manfaatkan kelonggaran pada '{non_crit[-1][1]}' (Slack {non_crit[-1][0]:,.2f}) untuk resource leveling agar beban kerja tim lebih merata.")
+        r.analyze("Rekomendasi Pengendalian Proyek", "Strategi pengawasan dan mitigasi risiko jadwal:", rec_bullets)
         return r

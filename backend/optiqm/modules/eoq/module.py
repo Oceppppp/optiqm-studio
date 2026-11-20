@@ -32,25 +32,17 @@ class EOQ(BaseModule):
         # Sharp Inc. (Heizer & Render): D=1000, S=10, H=0.5 -> Q*=200, cost=100, orders=5
         return SheetData(
             params={"D": 1000, "S": 10, "H": 0.5, "unit_price": 0, "holding_pct": 0, "working_days": 250, "lead_time": 4},
-            tables={"main": pd.DataFrame([["D", 1000], ["S", 10], ["H", 0.5], ["working_days", 250], ["lead_time", 4]],
-                                         columns=["Parameter", "Value"])},
         )
 
-    def _read(self, data: SheetData) -> dict:
-        p = self.resolved_params(data)
-        df = data.table("main", required=False)
-        if df is not None and len(df.columns) >= 2:
-            for _, row in df.iterrows():
-                k = str(row.iloc[0]).strip().lower()
-                if k in p and not pd.isna(row.iloc[1]):
-                    p[k] = float(row.iloc[1]) if k not in {"working_days"} else float(row.iloc[1])
-        return p
-
     def solve(self, data: SheetData) -> ModuleResult:
-        p = self._read(data)
+        p = self.resolved_params_with_table(data)
         D, S, H, price, pct, days, lt = (float(p["D"]), float(p["S"]), float(p["H"]),
                                           float(p["unit_price"]), float(p["holding_pct"]),
                                           float(p["working_days"]), float(p["lead_time"]))
+        if price < 0 or pct < 0 or lt < 0:
+            raise InputError("Harga unit, persentase simpan, dan lead time tidak boleh negatif.")
+        if days <= 0:
+            raise InputError("Hari kerja per tahun harus > 0.")
         if H <= 0 and price > 0 and pct > 0:
             H = price * (pct / 100.0 if pct > 1 else pct)
         if D <= 0 or S <= 0 or H <= 0:
@@ -58,8 +50,8 @@ class EOQ(BaseModule):
 
         q_star = math.sqrt(2.0 * D * S / H)
         orders = D / q_star
-        cycle = days / orders if days > 0 else 0.0
-        daily_d = D / days if days > 0 else 0.0
+        cycle = days / orders
+        daily_d = D / days
         rop = daily_d * lt
         order_cost = (D / q_star) * S
         hold_cost = (q_star / 2.0) * H
@@ -74,6 +66,11 @@ class EOQ(BaseModule):
         r.metric("Reorder Point (ROP)", rop, unit="unit")
         if purchase_cost > 0:
             r.metric("Total Biaya + Pembelian", total_inv_cost + purchase_cost)
+        if lt > cycle:
+            r.warnings.append(
+                f"Lead time ({lt:g} hari) melebihi siklus antar order ({cycle:,.1f} hari): "
+                "ROP harus dipantau berdasarkan Inventory Position (stok fisik + pesanan dalam perjalanan)."
+            )
 
         r.table("Ringkasan EOQ", ["Komponen", "Nilai"], [
             ["Ukuran Order Optimal (Q*)", q_star],
@@ -106,4 +103,35 @@ class EOQ(BaseModule):
             "x_label": "Hari", "y_label": "Unit",
         })
         r.interpretation = f"Pesan {q_star:,.2f} unit setiap {cycle:,.1f} hari (saat stok ≤ {rop:,.1f} unit); biaya tahunan {total_inv_cost:,.2f}."
+
+        # Analisis mendalam
+        tc_minus20 = (D / (0.8 * q_star)) * S + (0.8 * q_star / 2.0) * H
+        tc_plus20 = (D / (1.2 * q_star)) * S + (1.2 * q_star / 2.0) * H
+        r.analyze(
+            "Metodologi & Verifikasi Keseimbangan Biaya EOQ",
+            "Model Economic Order Quantity (Wilson) meminimalkan jumlah biaya pemesanan tahunan dan biaya penyimpanan tahunan pada permintaan konstan.",
+            [
+                f"Substitusi Rumus: Q* = √(2 × {D:g} × {S:g} / {H:g}) = {q_star:,.2f} unit.",
+                f"Verifikasi Titik Optimal: Biaya Pesan ({order_cost:,.2f}) = Biaya Simpan ({hold_cost:,.2f}) → Total = {total_inv_cost:,.2f}.",
+                f"Permintaan Harian (d) = {D:g} / {days:g} = {daily_d:,.2f} unit/hari; Reorder Point (ROP) = d × LT = {daily_d:,.2f} × {lt:g} = {rop:,.2f} unit.",
+            ],
+        )
+        r.analyze(
+            "Analisis Sensitivitas & Ketangguhan (Robustness) EOQ",
+            "Kurva total biaya EOQ berbentuk datar di sekitar titik minimum sehingga cukup toleran terhadap pembulatan ukuran lot kemasan.",
+            [
+                f"Jika order dikurangi 20% menjadi {0.8 * q_star:,.1f} unit: total biaya hanya naik {(tc_minus20 - total_inv_cost) / total_inv_cost * 100:.2f}% (menjadi {tc_minus20:,.2f}).",
+                f"Jika order dinaikkan 20% menjadi {1.2 * q_star:,.1f} unit: total biaya hanya naik {(tc_plus20 - total_inv_cost) / total_inv_cost * 100:.2f}% (menjadi {tc_plus20:,.2f}).",
+                f"Rata-rata persediaan tersimpan sepanjang tahun adalah {q_star / 2.0:,.2f} unit dengan perputaran (inventory turnover) {D / (q_star / 2.0):.2f} kali/tahun.",
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Kebijakan Persediaan",
+            "Implementasi praktis untuk tim pengadaan dan gudang:",
+            [
+                f"Tetapkan ukuran pemesanan standar sekitar {round(q_star):,} unit (boleh dibulatkan ke kelipatan dus/palet dalam rentang ±15% karena penalti biaya < 1%).",
+                f"Pasang alarm pemesanan otomatis saat posisi persediaan menyentuh {rop:,.1f} unit agar barang tiba tepat sebelum stok habis.",
+                "Jika permintaan harian atau waktu kirim pemasok berfluktuasi, lengkapi ROP dengan Safety Stock melalui modul Safety Stock & ROP.",
+            ],
+        )
         return r

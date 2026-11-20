@@ -51,6 +51,8 @@ class LotSizing(BaseModule):
         c_req = find_column(df, ["Requirement", "Net_Requirement", "Demand", "Kebutuhan"])
         periods = [str(v).strip() for v in df[c_per]]
         demands = [to_float(df.at[i, c_req], f"Kebutuhan {periods[i]}") for i in range(len(df))]
+        if any(d < 0 for d in demands):
+            raise InputError("Kebutuhan (Requirement) pada setiap periode tidak boleh negatif.")
 
         all_res = {k: fn(demands, S, H) for k, (_, fn) in ALGORITHMS.items()}
         chosen = all_res[p["method"]]
@@ -77,4 +79,49 @@ class LotSizing(BaseModule):
         best_k = min(ALGORITHMS, key=lambda k: all_res[k]["total_cost"])
         r.interpretation = (f"Metode {chosen_label} menghasilkan total biaya {chosen['total_cost']:,.2f}. "
                             f"Terbaik keseluruhan: {ALGORITHMS[best_k][0]} ({all_res[best_k]['total_cost']:,.2f}).")
+
+        # Analisis mendalam
+        ww_cost = all_res["wagner_whitin"]["total_cost"]
+        l4l_cost = all_res["lot_for_lot"]["total_cost"]
+        n_ord = sum(1 for q in chosen["orders"] if q > 0)
+        avg_ord = (sum(chosen["orders"]) / n_ord) if n_ord > 0 else 0.0
+        avg_end = sum(chosen["ending"]) / len(periods)
+        r.analyze(
+            "Metodologi Lot Sizing Dinamis & Garansi Optimalitas",
+            f"Dari {len(periods)} periode kebutuhan (total {sum(demands):,.0f} unit, S={S:g}, H={H:g}, EPP = S/H = {S/H:,.2f} unit-periode), "
+            "sistem mengevaluasi 5 metode sekaligus dengan Wagner-Whitin (Dynamic Programming) sebagai patokan biaya minimum global.",
+            [
+                f"Metode aktif '{chosen_label}': Total Biaya = {chosen['total_cost']:,.2f} (Setup = {chosen['setup_cost']:,.2f} untuk {n_ord} kali pesan; Simpan = {chosen['hold_cost']:,.2f}).",
+                f"Rata-rata ukuran sekali pesan = {avg_ord:,.2f} unit; rata-rata stok akhir tersimpan = {avg_end:,.2f} unit/periode.",
+            ],
+        )
+
+        ranked = sorted(ALGORITHMS.items(), key=lambda kv: all_res[kv[0]]["total_cost"])
+        cmp_bullets = [
+            f"#{idx} {lbl}: total {all_res[k]['total_cost']:,.2f} "
+            f"(selisih {all_res[k]['total_cost'] - ww_cost:+,.2f} atau {((all_res[k]['total_cost'] - ww_cost)/ww_cost*100) if ww_cost > 0 else 0:+.1f}% di atas Wagner-Whitin)."
+            for idx, (k, (lbl, _)) in enumerate(ranked, start=1)
+        ]
+        if l4l_cost > 0:
+            sav_l4l = l4l_cost - chosen["total_cost"]
+            cmp_bullets.append(
+                f"Dibanding kebijakan Lot-for-Lot ({l4l_cost:,.2f}), metode '{chosen_label}' menghemat {sav_l4l:,.2f} ({sav_l4l / l4l_cost * 100:.1f}%)."
+            )
+        r.analyze(
+            "Peringkat Efisiensi 5 Metode Lot Sizing",
+            "Perbandingan biaya total mengungkap seberapa dekat metode heuristik (EOQ, POQ, PPB) terhadap batas optimal Wagner-Whitin:",
+            cmp_bullets,
+        )
+
+        gap_ww = chosen["total_cost"] - ww_cost
+        rec_bullets = []
+        if gap_ww > 1e-6:
+            rec_bullets.append(f"Metode '{chosen_label}' lebih mahal {gap_ww:,.2f} dibanding Wagner-Whitin; pertimbangkan beralih ke Wagner-Whitin atau '{ranked[0][1][0]}'.")
+        else:
+            rec_bullets.append(f"Metode '{chosen_label}' telah mencapai biaya minimum global ({ww_cost:,.2f}).")
+        rec_bullets.append(
+            "Dalam lingkungan MRP dengan jadwal berubah-ubah (rolling horizon), POQ atau Part-Period Balancing (PPB) sering menjadi kompromi praktis "
+            "untuk mengurangi efek 'system nervousness' jika selisih biayanya tipis dari Wagner-Whitin."
+        )
+        r.analyze("Rekomendasi Kebijakan Lot Sizing", "Pertimbangan implementasi di sistem MRP/PPIC:", rec_bullets)
         return r

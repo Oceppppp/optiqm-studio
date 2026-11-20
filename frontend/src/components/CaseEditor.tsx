@@ -44,7 +44,10 @@ export function CaseEditor({ item, modules, onChange, onRunSingle }: Props) {
   const updateCell = (r: number, c: number, raw: string) => {
     if (!curTable) return;
     const trimmed = raw.trim();
-    const parsed: CellValue = trimmed === "" ? null : (!Number.isNaN(Number(trimmed)) && trimmed !== "-" ? Number(trimmed) : raw);
+    const isPartialNumber = trimmed === "-" || trimmed === "." || trimmed === "-." || /^-?\d+\.$/.test(trimmed) || /^-?\d+(\.\d+)?[eE][+-]?$/.test(trimmed);
+    const parsed: CellValue = trimmed === ""
+      ? null
+      : (!isPartialNumber && !Number.isNaN(Number(trimmed)) ? Number(trimmed) : raw);
     const rows = curTable.rows.map((row, ri) => (ri === r ? row.map((v, ci) => (ci === c ? parsed : v)) : row));
     onChange({
       ...item,
@@ -143,6 +146,9 @@ export function CaseEditor({ item, modules, onChange, onRunSingle }: Props) {
           <div className="params-grid">
             {mod.params.map((ps) => {
               const val = item.sheet.params[ps.name] ?? ps.default;
+              const boolVal = typeof val === "boolean"
+                ? val
+                : !["false", "0", "no", "tidak", ""].includes(String(val ?? "").trim().toLowerCase());
               return (
                 <div key={ps.name} className="param-field">
                   <label>{ps.label}</label>
@@ -151,7 +157,7 @@ export function CaseEditor({ item, modules, onChange, onRunSingle }: Props) {
                       {ps.choices.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
                   ) : ps.type === "boolean" ? (
-                    <select className="select" value={String(Boolean(val))} onChange={(e) => updateParam(ps.name, e.target.value === "true")}>
+                    <select className="select" value={String(boolVal)} onChange={(e) => updateParam(ps.name, e.target.value === "true")}>
                       <option value="true">Ya (true)</option>
                       <option value="false">Tidak (false)</option>
                     </select>

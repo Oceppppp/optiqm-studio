@@ -27,6 +27,8 @@ def lot_for_lot(demands: list[float], S: float, H: float) -> dict:
 
 
 def fixed_eoq(demands: list[float], S: float, H: float) -> dict:
+    if S <= 0:
+        return lot_for_lot(demands, S, H)
     avg_d = float(np.mean(demands))
     q_eoq = max(1.0, round(math.sqrt(2.0 * avg_d * S / H))) if avg_d > 0 else 0.0
     orders = []

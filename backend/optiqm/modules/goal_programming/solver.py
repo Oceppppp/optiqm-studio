@@ -66,10 +66,17 @@ def solve_goal_programming(variables: list[str], rows: list[GoalRow]) -> dict:
         if not res.success:
             raise SolverError(f"Goal Programming gagal pada Prioritas {pr}: {res.message}")
         # Kunci pencapaian deviasi prioritas saat ini untuk level berikutnya
-        A_ub.append(c); b_ub.append(float(res.fun) + 1e-7)
+        tol = max(1e-7, abs(float(res.fun)) * 1e-9)
+        A_ub.append(c); b_ub.append(float(res.fun) + tol)
         achieved_steps.append((pr, float(res.fun)))
 
     x = res.x[:n] if res is not None else np.zeros(n)
-    d_minus = res.x[n : n + m] if res is not None else np.zeros(m)
-    d_plus = res.x[n + m :] if res is not None else np.zeros(m)
-    return {"x": x, "d_minus": d_minus, "d_plus": d_plus, "goals": goals, "steps": achieved_steps}
+    d_minus = np.zeros(m)
+    d_plus = np.zeros(m)
+    for k, g in enumerate(goals):
+        diff = float(g.target - g.coeffs @ x)
+        if diff > 1e-9:
+            d_minus[k] = diff
+        elif diff < -1e-9:
+            d_plus[k] = -diff
+    return {"x": x, "d_minus": d_minus, "d_plus": d_plus, "goals": goals, "hard": hard, "steps": achieved_steps}

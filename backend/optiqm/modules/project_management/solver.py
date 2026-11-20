@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import itertools
 import math
 
 import networkx as nx
@@ -29,7 +30,12 @@ def parse_preds(raw: object) -> list[str]:
 
 
 def solve_cpm_pert(activities: list[Activity], target_time: float | None = None) -> dict:
-    by_name = {a.name: a for a in activities}
+    by_name: dict[str, Activity] = {}
+    for a in activities:
+        if a.name in by_name:
+            raise InputError(f"Nama aktivitas duplikat ditemukan: '{a.name}'.")
+        by_name[a.name] = a
+
     G = nx.DiGraph()
     for a in activities:
         G.add_node(a.name)
@@ -58,20 +64,30 @@ def solve_cpm_pert(activities: list[Activity], target_time: float | None = None)
         slack[u] = max(0.0, ls[u] - es[u])
 
     critical = {u for u in order if slack[u] < 1e-7}
-    # Cari satu jalur kritis dari simpul awal kritis ke simpul akhir kritis
+    # Kumpulkan jalur kritis (dibatasi maks 50 jalur untuk mencegah ledakan kombinatorial)
     crit_sub = G.subgraph(critical)
     starts = [u for u in crit_sub if crit_sub.in_degree(u) == 0]
     ends = [u for u in crit_sub if crit_sub.out_degree(u) == 0 and abs(ef[u] - duration) < 1e-7]
     crit_paths = []
     for st in starts:
         for en in ends:
-            for path in nx.all_simple_paths(crit_sub, st, en):
+            if st == en and abs(by_name[st].time - duration) < 1e-6:
+                crit_paths.append([st])
+                continue
+            for path in itertools.islice(nx.all_simple_paths(crit_sub, st, en), 50):
                 if abs(sum(by_name[n].time for n in path) - duration) < 1e-6:
                     crit_paths.append(path)
+                if len(crit_paths) >= 50:
+                    break
+            if len(crit_paths) >= 50:
+                break
+        if len(crit_paths) >= 50:
+            break
     if not crit_paths and critical:
         crit_paths = [[u for u in order if u in critical]]
 
-    var_total = sum(by_name[u].variance for u in crit_paths[0]) if crit_paths else 0.0
+    # Standar PERT konservatif: jika ada beberapa jalur kritis, gunakan varians terbesar
+    var_total = max((sum(by_name[u].variance for u in path) for path in crit_paths), default=0.0)
     std_total = math.sqrt(var_total)
     prob = None
     z = None

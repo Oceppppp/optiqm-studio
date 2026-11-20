@@ -134,7 +134,7 @@ class Transportation(BaseModule):
                 rows_it.append([sname, round(float(it.u[i]), 4), *vals])
             note = (f"Masuk {prob.sources[it.entering[0]]}->{prob.destinations[it.entering[1]]}, "
                     f"θ={it.theta:g}, Keluar {prob.sources[it.leaving[0]]}->{prob.destinations[it.leaving[1]]}"
-                    if it.entering else "Optimal (semua Δ >= 0)")
+                    if it.entering else "Optimal (semua indeks perbaikan Δ ≥ 0 pada biaya kerja)")
             r.steps.append(Table(f"Iterasi MODI #{k}", ["Sumber", "u_i", *prob.destinations], rows_it, note=note))
 
         r.chart("Pengiriman per Sumber", "bar", {
@@ -145,4 +145,72 @@ class Transportation(BaseModule):
         })
         r.interpretation = (f"Pengiriman optimal menghasilkan {'keuntungan' if prob.maximize else 'biaya'} "
                             f"total {opt_cost:,.2f} dengan {len(routes)} rute aktif.")
+
+        # Analisis mendalam
+        real_units = sum(
+            float(opt.alloc[i, j])
+            for i in range(len(prob.sources))
+            for j in range(len(prob.destinations))
+            if prob.sources[i] != "Dummy" and prob.destinations[j] != "Dummy"
+        )
+        avg_unit = opt_cost / real_units if real_units > 0 else 0.0
+        diff_init = (opt_cost - cost0) if prob.maximize else (cost0 - opt_cost)
+        pct_imp = (abs(diff_init) / abs(cost0) * 100.0) if abs(cost0) > 1e-12 else 0.0
+        r.analyze(
+            "Metodologi Solusi Awal & Optimasi MODI",
+            f"Solusi awal dibangun menggunakan metode {METHOD_LABEL[p['initial_method']]} (nilai awal {cost0:,.2f}), "
+            f"kemudian dioptimalkan dengan Metode Distribusi Termodifikasi (MODI / u_i + v_j = c_ij) selama {max(0, len(iters) - 1)} iterasi.",
+            [
+                f"Perbaikan MODI: {'kenaikan laba' if prob.maximize else 'penghematan biaya'} sebesar {diff_init:,.2f} ({pct_imp:.2f}%) dibandingkan solusi awal.",
+                f"Total pengiriman riil: {real_units:,.2f} unit pada {len(routes)} rute aktif dengan rata-rata {'keuntungan' if prob.maximize else 'biaya'} {avg_unit:,.3f}/unit.",
+                f"Kondisi keseimbangan: {'Seimbang (Total Supply = Total Demand).' if not (d_row or d_col) else ('Defisit pasokan — baris Dummy menampung kekurangan.' if d_row else 'Surplus kapasitas — kolom Dummy menampung sisa kapasitas tidak terpakai.')}",
+            ],
+        )
+
+        # Analisis opportunity cost non-basis
+        non_basic_deltas = []
+        alt_opt = []
+        for i in range(len(prob.sources)):
+            for j in range(len(prob.destinations)):
+                if (i, j) not in opt.basis and not (prob.prohibited is not None and prob.prohibited[i, j]):
+                    d_val = float(opt.index[i, j])
+                    if abs(d_val) < 1e-7:
+                        alt_opt.append(f"{prob.sources[i]} → {prob.destinations[j]}")
+                    else:
+                        non_basic_deltas.append((d_val, prob.sources[i], prob.destinations[j]))
+        non_basic_deltas.sort(key=lambda x: x[0])
+        top_route = max(routes, key=lambda x: abs(x[4])) if routes else None
+        route_bullets: list[str] = []
+        if top_route:
+            share = (abs(top_route[4]) / abs(opt_cost) * 100.0) if abs(opt_cost) > 1e-12 else 0.0
+            route_bullets.append(
+                f"Rute dominan: {top_route[0]} → {top_route[1]} mengirim {top_route[2]:,.2f} unit (tarif {top_route[3]:,.2f}, subtotal {top_route[4]:,.2f} atau {share:.1f}% total)."
+            )
+        if alt_opt:
+            route_bullets.append(
+                f"Terdeteksi SOLUSI OPTIMAL ALTERNATIF (Δ = 0) pada rute: {', '.join(alt_opt[:4])}. "
+                "Perusahaan memiliki fleksibilitas mengalihkan sebagian aliran ke rute ini tanpa memperburuk nilai total."
+            )
+        if non_basic_deltas:
+            best_d, s_nb, d_nb = non_basic_deltas[0]
+            route_bullets.append(
+                f"Rute non-aktif paling kompetitif: {s_nb} → {d_nb} (biaya peluang Δ = {best_d:,.3f}/unit). "
+                f"Tarif rute ini perlu membaik minimal {best_d:,.3f}/unit agar layak menggantikan rute aktif."
+            )
+        r.analyze(
+            "Bedah Rute Dominan & Biaya Peluang (Opportunity Cost)",
+            "Indeks perbaikan Δ pada iterasi MODI terakhir menunjukkan penalti marjinal per unit bila rute non-aktif dipaksa digunakan.",
+            route_bullets,
+        )
+
+        rec_bullets = [
+            f"Prioritaskan kontrak dan penjadwalan armada pada {len(routes)} rute aktif sesuai matriks alokasi optimal.",
+        ]
+        if d_row:
+            rec_bullets.append("Karena Total Demand > Supply, pertimbangkan penambahan kapasitas sumber atau alokasi prioritas ke tujuan dengan tarif termurah.")
+        elif d_col:
+            rec_bullets.append("Terdapat kapasitas pasokan berlebih (mengalir ke Dummy); evaluasi efisiensi produksi atau ekspansi pasar pada sumber yang tersisa di Dummy.")
+        if non_basic_deltas:
+            rec_bullets.append(f"Negosiasikan penurunan tarif minimal {non_basic_deltas[0][0]:,.2f}/unit pada rute {non_basic_deltas[0][1]} → {non_basic_deltas[0][2]} bila ingin menjadikannya jalur cadangan tanpa tambahan biaya.")
+        r.analyze("Rekomendasi Distribusi & Logistik", "Saran implementasi jaringan distribusi:", rec_bullets)
         return r

@@ -51,12 +51,24 @@ class DescriptiveStatistics(BaseModule):
             raise InputError("Tidak ditemukan kolom numerik yang valid.")
 
         rows_out = []
+        var_details = []
         for name, arr in cols_data:
-            q1, med, q3 = np.percentile(arr, [25, 50, 75])
+            q1, med, q3 = [float(x) for x in np.percentile(arr, [25, 50, 75])]
+            mean_v = float(arr.mean())
+            std_v = float(arr.std(ddof=1))
+            var_v = float(arr.var(ddof=1))
+            sk = 0.0 if std_v < 1e-12 else float(stats.skew(arr))
+            iqr = q3 - q1
+            cv = (std_v / abs(mean_v) * 100.0) if abs(mean_v) > 1e-12 else 0.0
+            lo_fence, hi_fence = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+            outliers = [float(x) for x in arr if x < lo_fence or x > hi_fence]
+            var_details.append({
+                "name": name, "n": len(arr), "mean": mean_v, "med": med, "std": std_v,
+                "iqr": iqr, "cv": cv, "skew": sk, "min": float(arr.min()), "max": float(arr.max()),
+                "outliers": outliers,
+            })
             rows_out.append([
-                name, len(arr), float(arr.mean()), float(med), float(arr.std(ddof=1)),
-                float(arr.var(ddof=1)), float(arr.min()), float(q1), float(q3),
-                float(arr.max()), float(stats.skew(arr)),
+                name, len(arr), mean_v, med, std_v, var_v, float(arr.min()), q1, q3, float(arr.max()), sk,
             ])
 
         first_name, first_arr = cols_data[0]
@@ -74,4 +86,58 @@ class DescriptiveStatistics(BaseModule):
             "x_label": "Rentang Nilai", "y_label": "Frekuensi",
         })
         r.interpretation = f"Dihitung statistik deskriptif untuk {len(cols_data)} variabel (n={len(first_arr)})."
+
+        # Analisis mendalam
+        r.analyze(
+            "Metodologi Statistik Deskriptif & Penyebaran Sampel",
+            f"Meringkas karakteristik distribusi {len(cols_data)} variabel numerik menggunakan simpangan baku sampel tak bias (ddof = 1), "
+            "rentang antarkuartil (IQR = Q3 − Q1), koefisien variasi (CV = s / |x̄|), kemencengan (Skewness), serta aturan deteksi pencilan Tukey (1.5 × IQR).",
+            [
+                f"Variabel '{d['name']}' (n={d['n']}): Mean = {d['mean']:,.3f}, Median = {d['med']:,.3f}, Std. Dev = {d['std']:,.3f}, Rentang = [{d['min']:g}, {d['max']:g}], IQR = {d['iqr']:,.3f}."
+                for d in var_details
+            ],
+        )
+
+        shape_bullets = []
+        any_outlier = False
+        any_skewed = False
+        for d in var_details:
+            sk = d["skew"]
+            if abs(sk) < 0.5:
+                sk_lbl = "relatif simetris"
+            elif sk >= 0.5:
+                sk_lbl = "menceng ke kanan (positively skewed — ekor panjang di nilai tinggi)"
+                any_skewed = True
+            else:
+                sk_lbl = "menceng ke kiri (negatively skewed — ekor panjang di nilai rendah)"
+                any_skewed = True
+            cv_lbl = "homogen (<15%)" if d["cv"] < 15 else ("moderat (15%–30%)" if d["cv"] <= 30 else "tinggi / heterogen (>30%)")
+            out_txt = f"{len(d['outliers'])} outlier ({', '.join(f'{x:g}' for x in d['outliers'][:5])})" if d["outliers"] else "tidak ada outlier"
+            if d["outliers"]:
+                any_outlier = True
+            shape_bullets.append(
+                f"'{d['name']}': distribusi {sk_lbl} (skew = {sk:+.3f}), variasi {cv_lbl} (CV = {d['cv']:.1f}%), deteksi 1.5×IQR: {out_txt}."
+            )
+        r.analyze(
+            "Bedah Bentuk Distribusi, Variabilitas (CV) & Deteksi Outlier",
+            "Analisis komprehensif terhadap kesimetrisan, tingkat konsistensi data, dan anomali:",
+            shape_bullets,
+        )
+
+        rec_bullets = []
+        if any_outlier or any_skewed:
+            rec_bullets.append("Karena terdeteksi kemencengan kuat atau nilai pencilan (outlier), gunakan Median dan IQR sebagai ukuran pusat/sebaran yang lebih tahan terhadap distorsi dibanding Mean.")
+            if any_outlier:
+                rec_bullets.append("Verifikasi nilai outlier di atas — pastikan bukan kesalahan pencatatan sebelum dipakai untuk pemodelan parametrik.")
+        else:
+            rec_bullets.append("Data relatif simetris dan bebas outlier: Mean dan Simpangan Baku representatif untuk analisis parametrik (uji t, peta kendali SPC, atau safety stock normal).")
+        if len(var_details) >= 2:
+            arr0, arr1 = cols_data[0][1], cols_data[1][1]
+            if len(arr0) == len(arr1) and arr0.std() > 1e-12 and arr1.std() > 1e-12:
+                corr = float(np.corrcoef(arr0, arr1)[0, 1])
+                rec_bullets.append(
+                    f"Korelasi Pearson antara '{cols_data[0][0]}' dan '{cols_data[1][0]}': r = {corr:+.3f} "
+                    f"({'hubungan kuat' if abs(corr) >= 0.7 else ('hubungan sedang' if abs(corr) >= 0.4 else 'hubungan lemah')})."
+                )
+        r.analyze("Rekomendasi Interpretasi & Analisis Lanjutan", "Panduan pemanfaatan hasil statistik:", rec_bullets)
         return r

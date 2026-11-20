@@ -53,9 +53,15 @@ class MaxFlow(BaseModule):
             if cap < 0 or rev < 0:
                 raise InputError("Kapasitas tidak boleh negatif.")
             if cap > 0:
-                G.add_edge(u, v, capacity=cap)
+                if G.has_edge(u, v):
+                    G[u][v]["capacity"] += cap
+                else:
+                    G.add_edge(u, v, capacity=cap)
             if rev > 0:
-                G.add_edge(v, u, capacity=rev)
+                if G.has_edge(v, u):
+                    G[v][u]["capacity"] += rev
+                else:
+                    G.add_edge(v, u, capacity=rev)
             raw_edges.append((u, v, cap))
 
         src, snk = str(p["source"]).strip(), str(p["sink"]).strip()
@@ -65,6 +71,14 @@ class MaxFlow(BaseModule):
             raise InputError("Simpul source dan sink tidak boleh sama.")
 
         flow_val, flow_dict = nx.maximum_flow(G, src, snk)
+        cut_val, (reach, non_reach) = nx.minimum_cut(G, src, snk)
+        min_cut_edges = [
+            (u, v, float(G[u][v]["capacity"]))
+            for u in reach
+            for v in G.successors(u)
+            if v in non_reach
+        ]
+
         rows_out = []
         edges_vis = []
         for u, v, d in G.edges(data=True):
@@ -84,4 +98,46 @@ class MaxFlow(BaseModule):
             "edges": edges_vis,
         })
         r.interpretation = f"Aliran maksimum dari {src} ke {snk} adalah {flow_val:g} unit."
+
+        # Analisis mendalam
+        out_cap_src = sum(float(G[src][v]["capacity"]) for v in G.successors(src))
+        in_cap_snk = sum(float(G[u][snk]["capacity"]) for u in G.predecessors(snk))
+        saturated = [row for row in rows_out if row[4] >= 99.999]
+        slack_active = [row for row in rows_out if 0 < row[3] < row[2] - 1e-9]
+        r.analyze(
+            "Metodologi Edmonds-Karp & Teorema Max-Flow Min-Cut",
+            f"Aliran maksimum dari simpul sumber '{src}' ke tujuan '{snk}' dihitung pada jaringan berarah ({G.number_of_nodes()} simpul, {G.number_of_edges()} segmen). "
+            "Menurut Teorema Max-Flow Min-Cut, besar aliran maksimum selalu sama dengan kapasitas potongan minimum (Minimum Cut).",
+            [
+                f"Verifikasi Max-Flow = Min-Cut = {float(flow_val):g} unit (kapasitas potongan minimum = {float(cut_val):g}).",
+                f"Kapasitas keluar dari sumber '{src}' = {out_cap_src:g} (terpakai {(flow_val / out_cap_src * 100.0) if out_cap_src > 0 else 0.0:.1f}%), "
+                f"kapasitas masuk ke tujuan '{snk}' = {in_cap_snk:g} (terpakai {(flow_val / in_cap_snk * 100.0) if in_cap_snk > 0 else 0.0:.1f}%).",
+                f"Terdapat {len(saturated)} segmen jenuh penuh (utilisasi 100%) dan {len(slack_active)} segmen aktif yang masih memiliki sisa kapasitas.",
+            ],
+        )
+
+        cut_desc = ", ".join(f"{u}→{v} (kap={cap:g})" for u, v, cap in min_cut_edges) or "-"
+        r.analyze(
+            "Identifikasi Bottleneck Jaringan (Minimum Cut)",
+            "Sisi-sisi yang memisahkan himpunan simpul terjangkau dari sumber (S) dan himpunan tujuan (T) merupakan pembatas utama throughput jaringan.",
+            [
+                f"Partisi Sumber S = {{{', '.join(sorted(reach))}}} | Partisi Tujuan T = {{{', '.join(sorted(non_reach))}}}.",
+                f"Segmen Bottleneck (Minimum Cut): {cut_desc}. Seluruh segmen ini jenuh 100%.",
+                f"Segmen aktif dengan sisa kapasitas terbesar: "
+                + (
+                    ", ".join(f"{row[0]}→{row[1]} (sisa {row[2] - row[3]:g})" for row in sorted(slack_active, key=lambda x: -(x[2] - x[3]))[:3])
+                    if slack_active else "tidak ada segmen aktif yang tersisa."
+                ),
+            ],
+        )
+
+        r.analyze(
+            "Rekomendasi Ekspansi Kapasitas",
+            "Panduan investasi peningkatan throughput jaringan:",
+            [
+                f"Untuk menaikkan aliran maksimum melampaui {float(flow_val):g} unit, ekspansi kapasitas HARUS menyasar segmen pada Minimum Cut ({cut_desc}).",
+                "Menambah kapasitas pada segmen di luar Minimum Cut tidak akan menaikkan throughput total selama bottleneck utama belum dibuka.",
+                "Lakukan pemantauan rutin pada segmen jenuh 100% karena gangguan kecil di salah satu segmen tersebut akan langsung menurunkan aliran total jaringan.",
+            ],
+        )
         return r

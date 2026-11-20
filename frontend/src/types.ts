@@ -63,6 +63,12 @@ export interface ChartSpec {
   data: Record<string, unknown>;
 }
 
+export interface AnalysisSection {
+  title: string;
+  content: string;
+  bullets: string[];
+}
+
 export interface ModuleResultDict {
   summary: ResultMetric[];
   tables: ResultTable[];
@@ -70,6 +76,7 @@ export interface ModuleResultDict {
   steps: ResultTable[];
   warnings: string[];
   interpretation: string;
+  analysis?: AnalysisSection[];
 }
 
 export interface CaseRunResult {

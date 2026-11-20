@@ -48,9 +48,11 @@ class DecisionTree(BaseModule):
 
         nodes = {}
         children: dict[str, list[str]] = {}
-        root = None
+        roots = []
         for i in range(len(df)):
             nid = str(df.at[i, c_node]).strip()
+            if nid in nodes:
+                raise InputError(f"ID simpul duplikat ditemukan: '{nid}'.")
             par_raw = df.at[i, c_par]
             par = "" if pd.isna(par_raw) or str(par_raw).strip() in {"-", "", "root"} else str(par_raw).strip()
             ntype = str(df.at[i, c_type]).strip().lower()
@@ -61,23 +63,44 @@ class DecisionTree(BaseModule):
             pay = to_float(df.at[i, c_pay], f"Payoff {nid}") if not pd.isna(df.at[i, c_pay]) else 0.0
             nodes[nid] = {"id": nid, "parent": par, "type": ntype, "branch": br, "prob": prob, "pay": pay}
             if not par:
-                root = nid
+                roots.append(nid)
             else:
                 children.setdefault(par, []).append(nid)
-        if not root:
+        if not roots:
             raise InputError("Simpul akar (Parent='-') tidak ditemukan.")
+        if len(roots) > 1:
+            raise InputError(f"Pohon keputusan hanya boleh memiliki 1 simpul akar (ditemukan: {', '.join(roots)}).")
+        root = roots[0]
+        for nid, nd in nodes.items():
+            if nd["parent"] and nd["parent"] not in nodes:
+                raise InputError(f"Induk '{nd['parent']}' dari simpul '{nid}' tidak ditemukan.")
+            if nd["type"] == "terminal" and children.get(nid):
+                raise InputError(f"Simpul terminal '{nid}' tidak boleh memiliki cabang anak.")
 
         emv: dict[str, float] = {}
         best_child: dict[str, str] = {}
+        branch_vals: dict[str, list[tuple[str, float]]] = {}
+        visiting: set[str] = set()
 
         def rollback(u: str) -> float:
+            if u in visiting:
+                raise InputError(f"Pohon keputusan mengandung siklus pada simpul '{u}'.")
+            visiting.add(u)
             nd = nodes[u]
             ch = children.get(u, [])
             if nd["type"] == "terminal" or not ch:
                 emv[u] = nd["pay"]
+                visiting.remove(u)
                 return emv[u]
-            vals = [(c, rollback(c) + nodes[c]["pay"] if nodes[c]["type"] != "terminal" else rollback(c)) for c in ch]
+            vals = []
+            for c in ch:
+                c_is_leaf = nodes[c]["type"] == "terminal" or not children.get(c)
+                c_val = rollback(c) if c_is_leaf else (rollback(c) + nodes[c]["pay"])
+                vals.append((c, c_val))
+            branch_vals[u] = vals
             if nd["type"] == "chance":
+                if any(nodes[c]["prob"] < 0 for c in ch):
+                    raise InputError(f"Probabilitas cabang pada simpul chance '{u}' tidak boleh negatif.")
                 s_p = sum(nodes[c]["prob"] for c in ch)
                 if abs(s_p - 1.0) > 1e-3:
                     raise InputError(f"Jumlah probabilitas cabang simpul chance '{u}' harus = 1 (saat ini {s_p:.3f}).")
@@ -87,21 +110,35 @@ class DecisionTree(BaseModule):
                 b_c, b_v = pick_fn(vals, key=lambda x: x[1])
                 emv[u] = b_v
                 best_child[u] = b_c
+            visiting.remove(u)
             return emv[u]
 
-        root_val = rollback(root)
+        root_sub = rollback(root)
+        root_val = root_sub + (nodes[root]["pay"] if children.get(root) else 0.0)
+        if children.get(root) and abs(nodes[root]["pay"]) > 1e-12:
+            emv[root] = root_val
+        if len(emv) < len(nodes):
+            unreachable = [nid for nid in nodes if nid not in emv]
+            raise InputError(f"Simpul tidak terhubung ke akar '{root}': {', '.join(unreachable)}.")
+
         opt_edges = set()
-        stack = [root]
+        opt_terminals: list[float] = []
+        stack = [(root, nodes[root]["pay"] if children.get(root) else 0.0)]
         while stack:
-            cur = stack.pop()
+            cur, acc = stack.pop()
+            ch = children.get(cur, [])
             if cur in best_child:
                 bc = best_child[cur]
                 opt_edges.add((cur, bc))
-                stack.append(bc)
-            elif nodes[cur]["type"] == "chance":
-                for c in children.get(cur, []):
+                bc_leaf = nodes[bc]["type"] == "terminal" or not children.get(bc)
+                stack.append((bc, acc + (0.0 if bc_leaf else nodes[bc]["pay"])))
+            elif nodes[cur]["type"] == "chance" and ch:
+                for c in ch:
                     opt_edges.add((cur, c))
-                    stack.append(c)
+                    c_leaf = nodes[c]["type"] == "terminal" or not children.get(c)
+                    stack.append((c, acc + (0.0 if c_leaf else nodes[c]["pay"])))
+            else:
+                opt_terminals.append(acc + nodes[cur]["pay"])
 
         r = ModuleResult()
         r.metric("EMV Optimal", root_val, highlight=True)
@@ -124,4 +161,45 @@ class DecisionTree(BaseModule):
         r.interpretation = f"EMV optimal pohon keputusan = {root_val:,.2f}" + (
             f" dengan memilih '{nodes[best_child[root]]['branch']}'." if root in best_child else "."
         )
+
+        # Analisis mendalam
+        n_dec = sum(1 for n in nodes.values() if n["type"] == "decision")
+        n_ch = sum(1 for n in nodes.values() if n["type"] == "chance")
+        n_term = sum(1 for n in nodes.values() if n["type"] == "terminal")
+        r.analyze(
+            "Metodologi Induksi Mundur (Roll-Back EMV)",
+            f"Pohon keputusan terdiri dari {len(nodes)} simpul ({n_dec} keputusan, {n_ch} peluang/chance, {n_term} terminal) "
+            f"dengan tujuan {'Maksimasi Profit' if is_profit else 'Minimasi Biaya'}. Evaluasi dilakukan mundur dari daun ke akar: "
+            "simpul chance menghitung rata-rata tertimbang Σ(p_i × V_i), sedangkan simpul decision memilih cabang terbaik.",
+            [
+                f"EMV Optimal di simpul akar '{root}' = {root_val:,.2f}.",
+                f"Pada kebijakan optimal, rentang hasil akhir (terminal) yang mungkin terjadi berkisar dari {min(opt_terminals):,.2f} hingga {max(opt_terminals):,.2f}.",
+            ],
+        )
+
+        branch_bullets = []
+        if root in branch_vals:
+            sorted_root = sorted(branch_vals[root], key=lambda x: x[1], reverse=is_profit)
+            for idx, (cid, cval) in enumerate(sorted_root, start=1):
+                tag = " (TERPILIH)" if cid == best_child.get(root) else f" (selisih {cval - sorted_root[0][1]:+,.2f})"
+                branch_bullets.append(f"#{idx} Cabang '{nodes[cid]['branch']}' ({cid}): EMV = {cval:,.2f}{tag}.")
+        for uid, bc in best_child.items():
+            if uid != root:
+                branch_bullets.append(f"Keputusan lanjutan di simpul '{uid}' ({nodes[uid]['branch']}): pilih '{nodes[bc]['branch']}' (EMV = {emv[uid]:,.2f}).")
+        r.analyze(
+            "Bedah Perbandingan Cabang & Rencana Keputusan Bertahap",
+            "Perbandingan EMV antar cabang keputusan memperlihatkan margin keunggulan strategi optimal atas alternatif lain:",
+            branch_bullets or ["Simpul akar bukan simpul keputusan; EMV merepresentasikan nilai ekspektasi murni seluruh cabang peluang."],
+        )
+
+        rec_bullets = []
+        if root in best_child:
+            rec_bullets.append(f"Langkah awal optimal: eksekusi cabang '{nodes[best_child[root]]['branch']}' untuk memperoleh ekspektasi nilai tertinggi ({root_val:,.2f}).")
+        if opt_terminals and min(opt_terminals) < 0 and is_profit:
+            rec_bullets.append(
+                f"Perhatikan risiko downside: meski EMV positif/tertinggi, skenario terburuk pada jalur optimal masih berpotensi rugi sebesar {min(opt_terminals):,.2f} — "
+                "pastikan cadangan likuiditas memadai atau pertimbangkan opsi dengan risiko lebih kecil jika perusahaan sangat menghindari kerugian."
+            )
+        rec_bullets.append("Lakukan uji sensitivitas dengan mengubah probabilitas pada simpul peluang utama untuk mengetahui ambang batas probabilitas di mana keputusan berubah.")
+        r.analyze("Rekomendasi Strategis & Mitigasi Risiko", "Implikasi keputusan bertahap:", rec_bullets)
         return r

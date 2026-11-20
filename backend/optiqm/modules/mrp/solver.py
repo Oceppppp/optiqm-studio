@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from optiqm.core import InputError
 
@@ -64,15 +65,29 @@ def explode_mrp(items: dict[str, ItemInfo], edges: list[BOMEdge], mps: dict[str,
         poh = [0.0] * (horizon + 1)
         nr = [0.0] * (horizon + 1)
         por = [0.0] * (horizon + 1)
-        porel = [0.0] * (horizon + 1)
+        porel = [0.0] * (horizon + 1)  # indeks 0 = Past Due (rel_t <= 0)
 
         poh[0] = info.on_hand
+        # Jika ada kebutuhan past-due (gr[0] > 0) dari induk yang past-due, kurangi dari stok awal dulu
+        if gr[0] > 0:
+            if poh[0] >= gr[0]:
+                poh[0] -= gr[0]
+            else:
+                nr[0] = gr[0] - poh[0]
+                if info.lot_size > 0:
+                    lots = max(1, math.ceil(nr[0] / info.lot_size - 1e-9))
+                    por[0] = lots * info.lot_size
+                else:
+                    por[0] = nr[0]
+                poh[0] = poh[0] + por[0] - gr[0]
+                porel[0] += por[0]
+
         for t in range(1, horizon + 1):
             avail = poh[t - 1] + sr[t]
-            if avail < gr[t]:
+            if avail < gr[t] - 1e-9:
                 nr[t] = gr[t] - avail
                 if info.lot_size > 0:
-                    lots = int(-(-nr[t] // info.lot_size))
+                    lots = max(1, math.ceil(nr[t] / info.lot_size - 1e-9))
                     por[t] = lots * info.lot_size
                 else:
                     por[t] = nr[t]
@@ -80,20 +95,20 @@ def explode_mrp(items: dict[str, ItemInfo], edges: list[BOMEdge], mps: dict[str,
                 rel_t = t - info.lead_time
                 if rel_t >= 1:
                     porel[rel_t] += por[t]
-                elif rel_t >= 0:
+                else:
                     porel[0] += por[t]
             else:
                 poh[t] = avail - gr[t]
 
-        # Ledakkan ke komponen anak
+        # Ledakkan ke komponen anak (termasuk past-due di indeks 0)
         for e in children_of.get(name, []):
-            for t in range(1, horizon + 1):
+            for t in range(0, horizon + 1):
                 if porel[t] > 0:
                     gross[e.child][t] += porel[t] * e.qty
 
         results.append({
             "item": name, "level": levels.get(name, 0), "lead_time": info.lead_time,
-            "on_hand": info.on_hand, "lot_size": info.lot_size,
+            "on_hand": info.on_hand, "lot_size": info.lot_size, "past_due": porel[0],
             "gr": gr, "sr": sr, "poh": poh, "nr": nr, "por": por, "porel": porel,
         })
     return results

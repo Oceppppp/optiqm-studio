@@ -65,4 +65,49 @@ class FactorRating(BaseModule):
             "x_label": "Lokasi", "y_label": "Skor Total",
         })
         r.interpretation = f"Lokasi terbaik adalah '{locs[best_idx]}' dengan skor terbobot {totals[best_idx]:,.2f}."
+
+        # Analisis mendalam
+        ranked = sorted(range(len(locs)), key=lambda j: totals[j], reverse=True)
+        top_w_idx = int(np.argmax(norm_w))
+        r.analyze(
+            "Metodologi Factor Rating (Weighted Scoring)",
+            f"Sebanyak {len(locs)} kandidat lokasi dinilai pada {len(factors)} faktor dengan rumus Skor_j = Σ(w_i × skor_ij) "
+            f"(total bobot = {float(norm_w.sum()):.4f}).",
+            [
+                f"Faktor dengan bobot terbesar: '{factors[top_w_idx]}' ({norm_w[top_w_idx] * 100:.1f}% dari keputusan).",
+                "Peringkat lokasi: " + " > ".join(f"{locs[j]} ({totals[j]:,.2f})" for j in ranked) + ".",
+            ],
+        )
+
+        driver_bullets = []
+        if len(locs) > 1:
+            second_idx = ranked[1]
+            margin = float(totals[best_idx] - totals[second_idx])
+            margin_pct = (margin / totals[second_idx] * 100.0) if abs(totals[second_idx]) > 1e-12 else 0.0
+            diffs = [float(weighted[i, best_idx] - weighted[i, second_idx]) for i in range(len(factors))]
+            best_f_i = int(np.argmax(diffs))
+            worst_f_i = int(np.argmin(diffs))
+            driver_bullets.append(
+                f"Margin keunggulan '{locs[best_idx]}' atas peringkat ke-2 ('{locs[second_idx]}') = +{margin:,.2f} poin ({margin_pct:+.2f}%)."
+            )
+            driver_bullets.append(
+                f"Faktor pendorong utama kemenangan: '{factors[best_f_i]}' (bobot {norm_w[best_f_i]*100:.1f}%, menyumbang keunggulan +{diffs[best_f_i]:,.2f} poin terbobot)."
+            )
+            if diffs[worst_f_i] < -1e-9:
+                driver_bullets.append(
+                    f"Titik kelemahan relatif: pada faktor '{factors[worst_f_i]}', '{locs[best_idx]}' tertinggal {diffs[worst_f_i]:,.2f} poin terbobot dari '{locs[second_idx]}'."
+                )
+        else:
+            top_contrib = int(np.argmax(weighted[:, 0]))
+            driver_bullets.append(f"Penyumbang skor terbesar adalah faktor '{factors[top_contrib]}' ({weighted[top_contrib, 0]:,.2f} poin).")
+        r.analyze("Bedah Faktor Penentu & Keunggulan Kompetitif", "Analisis kontribusi skor terbobot antar kandidat lokasi teratas:", driver_bullets)
+
+        rec_bullets = [f"Pilih '{locs[best_idx]}' sebagai lokasi utama karena meraih skor komposit tertinggi ({totals[best_idx]:,.2f})."]
+        if len(locs) > 1 and totals[ranked[1]] > 0 and (totals[best_idx] - totals[ranked[1]]) / totals[ranked[1]] < 0.05:
+            rec_bullets.append(
+                f"Selisih terhadap '{locs[ranked[1]]}' relatif tipis (<5%): lakukan uji sensitivitas bobot dan lengkapi dengan evaluasi kuantitatif biaya (Location Break-Even) sebelum keputusan final."
+            )
+        else:
+            rec_bullets.append("Keunggulan skor cukup jelas; pastikan data survei pada faktor berbobot terbesar telah terverifikasi secara objektif.")
+        r.analyze("Rekomendasi Keputusan Lokasi", "Tindak lanjut validasi pemilihan lokasi:", rec_bullets)
         return r

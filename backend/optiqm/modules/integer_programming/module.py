@@ -56,7 +56,11 @@ class IntegerProgramming(BaseModule):
         for i in range(1, len(df)):
             nm = str(df.at[i, name_col]).strip()
             if nm.lower() in {"type", "tipe", "jenis"}:
-                var_types = [str(df.at[i, col] or p["default_type"]).strip() for col in var_cols]
+                var_types = [
+                    p["default_type"] if pd.isna(df.at[i, col]) or not str(df.at[i, col]).strip()
+                    else str(df.at[i, col]).strip()
+                    for col in var_cols
+                ]
                 continue
             A.append([0.0 if pd.isna(df.at[i, col]) else to_float(df.at[i, col], f"{nm}/{col}") for col in var_cols])
             signs.append(normalize_sign(df.at[i, sign_col], nm))
@@ -67,7 +71,11 @@ class IntegerProgramming(BaseModule):
 
         prob = LPProblem(var_cols, c, np.array(A), signs, np.array(b), names, p["objective"] == "max")
         x, z, slack = solve_milp(prob, var_types)
-        lp_sol = solve_lp(prob)
+        lp_bounds = [
+            (0.0, 1.0) if vt.strip().lower() in {"bin", "binary", "0-1", "biner"} else (0.0, None)
+            for vt in var_types
+        ]
+        lp_sol = solve_lp(prob, bounds=lp_bounds)
 
         r = ModuleResult()
         r.metric("Nilai Optimal Z (Integer)", z, highlight=True)
@@ -82,4 +90,60 @@ class IntegerProgramming(BaseModule):
 
         parts = ", ".join(f"{v}={x[j]:g}" for j, v in enumerate(var_cols))
         r.interpretation = f"Solusi integer optimal Z = {z:,.4f} pada {parts} (LP relaxation = {lp_sol.objective:,.4f})."
+
+        # Analisis mendalam
+        gap_abs = abs(lp_sol.objective - z)
+        gap_pct = (gap_abs / abs(lp_sol.objective) * 100.0) if abs(lp_sol.objective) > 1e-12 else 0.0
+        sub_str = " + ".join(f"({c[j]:g}×{x[j]:g})" for j in range(len(var_cols)))
+        type_summary = ", ".join(f"{v}:{vt}" for v, vt in zip(var_cols, var_types))
+        r.analyze(
+            "Metodologi Branch-and-Bound (MILP) & Relaksasi LP",
+            f"Masalah diselesaikan dengan Mixed-Integer Linear Programming (HiGHS Branch-and-Cut) untuk tujuan "
+            f"{'Maksimasi' if prob.maximize else 'Minimasi'} dengan domain variabel ({type_summary}).",
+            [
+                f"Solusi Relaksasi LP (tanpa syarat bulat, tetap menghormati batas biner 0–1): Z_LP = {lp_sol.objective:,.4f}.",
+                f"Solusi Integer Optimal: Z_IP = {sub_str} = {z:,.4f}.",
+                f"Integrality Gap (biaya diskretisasi): |Z_LP − Z_IP| = {gap_abs:,.4f} ({gap_pct:.2f}% terhadap batas teoretis LP).",
+            ],
+        )
+
+        detail_bullets: list[str] = []
+        frac_vars = [
+            f"{v} (LP={lp_sol.x[j]:.3f} → IP={x[j]:g})"
+            for j, v in enumerate(var_cols)
+            if abs(lp_sol.x[j] - x[j]) > 1e-5
+        ]
+        if frac_vars:
+            detail_bullets.append(
+                f"Perbedaan nilai antara LP Relaxation dan solusi bulat terjadi pada: {', '.join(frac_vars)}. "
+                "Ini membuktikan pembulatan naif dari LP berisiko melanggar kendala atau menghasilkan nilai sub-optimal."
+            )
+        else:
+            detail_bullets.append("Solusi LP Relaxation kebetulan sudah memenuhi syarat bilangan bulat (Integrality Gap = 0).")
+        for i, n in enumerate(names):
+            lhs_i = float(prob.A[i] @ x)
+            util_pct = (lhs_i / prob.b[i] * 100.0) if abs(prob.b[i]) > 1e-12 else 0.0
+            detail_bullets.append(
+                f"Kendala '{n}': terpakai {lhs_i:,.4g} dari {prob.b[i]:,.4g} ({prob.signs[i]}), "
+                f"sisa/selisih = {slack[i]:,.4g}" + (f" (utilisasi {util_pct:.1f}%)." if prob.signs[i] == "<=" and prob.b[i] > 0 else ".")
+            )
+        r.analyze(
+            "Analisis Integrality Gap & Utilisasi Kendala",
+            "Perbandingan solusi kontinu vs diskrit memperlihatkan seberapa ketat syarat bilangan bulat/biner memengaruhi pemanfaatan kapasitas.",
+            detail_bullets,
+        )
+
+        chosen = [f"{v}={x[j]:g}" for j, v in enumerate(var_cols) if x[j] > 1e-6]
+        rejected = [v for j, v in enumerate(var_cols) if x[j] <= 1e-6]
+        tightest = min(range(len(names)), key=lambda i: slack[i])
+        r.analyze(
+            "Rekomendasi Keputusan",
+            "Panduan eksekusi keputusan diskrit berdasarkan hasil optimasi MILP:",
+            [
+                f"Keputusan aktif terpilih: {', '.join(chosen) or 'tidak ada variabel bernilai positif'}."
+                + (f" Variabel tidak dipilih (0): {', '.join(rejected)}." if rejected else ""),
+                f"Kendala paling ketat adalah '{names[tightest]}' (sisa {slack[tightest]:,.4g}); penambahan kapasitas kecil di sini dapat membuka kombinasi bulat yang lebih baik.",
+                "Perhatikan bahwa dalam MILP tidak berlaku Shadow Price linear seperti LP biasa—uji skenario perubahan RHS secara langsung untuk menilai dampak ekspansi.",
+            ],
+        )
         return r

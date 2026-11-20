@@ -106,15 +106,17 @@ def initial_solution(p: TransportProblem, method: str) -> tuple[np.ndarray, set[
 def _vogel_pick(w, s, d, rows, cols) -> tuple[int, int, str]:
     def penalty(vals: list[float]) -> float:
         vals = sorted(vals)
-        return vals[1] - vals[0] if len(vals) > 1 else vals[0]
+        return vals[1] - vals[0] if len(vals) > 1 else 0.0
 
     cands = []
     for r in rows:
         c_best = min(cols, key=lambda c: (w[r, c], c))
-        cands.append((penalty([w[r, c] for c in cols]), r, c_best, f"penalti baris {penalty([w[r, c] for c in cols]):g}"))
+        p_val = penalty([w[r, c] for c in cols])
+        cands.append((p_val, r, c_best, f"penalti baris {p_val:g}"))
     for c in cols:
         r_best = min(rows, key=lambda r: (w[r, c], r))
-        cands.append((penalty([w[r, c] for r in rows]), r_best, c, f"penalti kolom {penalty([w[r, c] for r in rows]):g}"))
+        p_val = penalty([w[r, c] for r in rows])
+        cands.append((p_val, r_best, c, f"penalti kolom {p_val:g}"))
     # penalti terbesar; seri -> biaya sel terkecil -> alokasi terbesar
     best = max(cands, key=lambda t: (round(t[0], 9), -w[t[1], t[2]], min(s[t[1]], d[t[2]])))
     return best[1], best[2], best[3]
@@ -199,6 +201,8 @@ def modi(p: TransportProblem, alloc: np.ndarray, basis: set[Cell], max_iter: int
     w = p.work_cost
     alloc, basis = alloc.copy(), set(basis)
     its: list[Iteration] = []
+    seen_bases: set[frozenset[Cell]] = set()
+    use_bland = False
     for _ in range(max_iter):
         u, v = _potentials(w, basis)
         idx = w - u[:, None] - v[None, :]
@@ -209,11 +213,22 @@ def modi(p: TransportProblem, alloc: np.ndarray, basis: set[Cell], max_iter: int
         masked = np.where(np.isnan(idx), np.inf, idx)
         if masked.min() >= -1e-9:
             return its
-        enter = tuple(int(x) for x in np.unravel_index(np.argmin(masked), masked.shape))
+        b_key = frozenset(basis)
+        if b_key in seen_bases:
+            use_bland = True
+        seen_bases.add(b_key)
+        if use_bland:
+            neg_cells = [(r, c) for r in range(idx.shape[0]) for c in range(idx.shape[1]) if masked[r, c] < -1e-9]
+            enter = neg_cells[0]
+        else:
+            enter = tuple(int(x) for x in np.unravel_index(np.argmin(masked), masked.shape))
         path = _cycle(basis, enter)
         minus = [c for c, sg in path if sg == "-"]
         theta = min(alloc[c] for c in minus)
-        leaving = min((c for c in minus if abs(alloc[c] - theta) <= TOL), key=lambda c: (-w[c], c))
+        if use_bland:
+            leaving = min(c for c in minus if abs(alloc[c] - theta) <= TOL)
+        else:
+            leaving = min((c for c in minus if abs(alloc[c] - theta) <= TOL), key=lambda c: (-w[c], c))
         for c, sg in path:
             alloc[c] += theta if sg == "+" else -theta
         alloc[np.abs(alloc) < TOL] = 0.0

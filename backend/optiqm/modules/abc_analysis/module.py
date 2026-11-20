@@ -34,6 +34,8 @@ class ABCAnalysis(BaseModule):
     def solve(self, data: SheetData) -> ModuleResult:
         p = self.resolved_params(data)
         cut_a, cut_b = float(p["cutoff_a"]), float(p["cutoff_b"])
+        if not (0 < cut_a < cut_b <= 100):
+            raise InputError("Batas persentase harus memenuhi 0 < Cutoff A < Cutoff A+B ≤ 100.")
         df = clean_frame(data.table("main"))
         require_rows(df, 1, "Tabel item persediaan")
         c_item = find_column(df, ["Item", "Nama", "SKU", "Barang"], required=False) or df.columns[0]
@@ -56,12 +58,14 @@ class ABCAnalysis(BaseModule):
         rows_out = []
         cum = 0.0
         counts = {"A": 0, "B": 0, "C": 0}
+        class_vals = {"A": 0.0, "B": 0.0, "C": 0.0}
         for nm, d, c, val in items:
             pct = val / total_val * 100.0
             prev_cum = cum
             cum += pct
             cls = "A" if prev_cum < cut_a - 1e-6 else ("B" if prev_cum < cut_b - 1e-6 else "C")
             counts[cls] += 1
+            class_vals[cls] += val
             rows_out.append([nm, d, c, val, pct, cum, cls])
 
         r = ModuleResult()
@@ -80,4 +84,36 @@ class ABCAnalysis(BaseModule):
             "x_label": "Item", "y_label": "Persentase (%)",
         })
         r.interpretation = f"Dari {len(items)} item (total nilai {total_val:,.2f}): Kelas A={counts['A']}, B={counts['B']}, C={counts['C']}."
+
+        # Analisis mendalam
+        n_items = len(items)
+        r.analyze(
+            "Metodologi Klasifikasi ABC (Hukum Pareto)",
+            f"Seluruh {n_items} SKU dihitung nilai pemakaian tahunannya (Demand × Harga/Unit), diurutkan dari terbesar ke terkecil, "
+            f"lalu diklasifikasikan berdasarkan batas kumulatif sebelum item masuk: Kelas A (<{cut_a:g}%), Kelas B ({cut_a:g}%–{cut_b:g}%), dan Kelas C (≥{cut_b:g}%).",
+            [
+                f"Kelas A: {counts['A']} item ({counts['A']/n_items*100:.1f}% SKU) menyumbang {class_vals['A']:,.2f} ({class_vals['A']/total_val*100:.1f}% total nilai).",
+                f"Kelas B: {counts['B']} item ({counts['B']/n_items*100:.1f}% SKU) menyumbang {class_vals['B']:,.2f} ({class_vals['B']/total_val*100:.1f}% total nilai).",
+                f"Kelas C: {counts['C']} item ({counts['C']/n_items*100:.1f}% SKU) menyumbang {class_vals['C']:,.2f} ({class_vals['C']/total_val*100:.1f}% total nilai).",
+            ],
+        )
+        top3 = rows_out[:3]
+        top3_pct = sum(row[4] for row in top3)
+        r.analyze(
+            "Bedah Konsentrasi Nilai (Item Kritis)",
+            f"Tiga item teratas menyumbang {top3_pct:.1f}% dari seluruh nilai pemakaian persediaan tahunan:",
+            [
+                f"Peringkat #{idx}: '{row[0]}' — nilai {row[3]:,.2f} ({row[4]:.1f}%, Demand={row[1]:g} × Harga={row[2]:g}) → Kelas {row[6]}."
+                for idx, row in enumerate(top3, start=1)
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Kebijakan Pengendalian per Kelas",
+            "Alokasikan energi pengawasan proporsional terhadap kontribusi finansial masing-masing kelas:",
+            [
+                f"Kelas A ({counts['A']} SKU): terapkan pemantauan ketat (perpetual inventory), cycle counting bulanan, negosiasi harga pemasok, dan akurasi peramalan tinggi.",
+                f"Kelas B ({counts['B']} SKU): gunakan kebijakan EOQ/ROP standar dengan review berkala per kuartal.",
+                f"Kelas C ({counts['C']} SKU): gunakan sistem pengendalian sederhana (two-bin / pemesanan massal periodik) agar biaya administrasi tetap minimal.",
+            ],
+        )
         return r

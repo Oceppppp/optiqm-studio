@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ChartSpec } from "../types";
 
 const PALETTE = ["#0f5257", "#d97706", "#2563eb", "#059669", "#dc2626", "#7c3aed"];
@@ -141,10 +142,14 @@ function ScatterChart({ data }: { data: Record<string, unknown> }) {
 
   const W = 500, H = 220, L = 46, R = 16, T = 16, B = 32;
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
-  const minX = Math.min(...xs) - 10, maxX = Math.max(...xs) + 10;
-  const minY = Math.min(...ys) - 10, maxY = Math.max(...ys) + 10;
-  const px = (x: number) => L + ((x - minX) / Math.max(1, maxX - minX)) * (W - L - R);
-  const py = (y: number) => H - B - ((y - minY) / Math.max(1, maxY - minY)) * (H - T - B);
+  const rawMinX = Math.min(...xs), rawMaxX = Math.max(...xs);
+  const rawMinY = Math.min(...ys), rawMaxY = Math.max(...ys);
+  const padX = Math.max((rawMaxX - rawMinX) * 0.12, 1);
+  const padY = Math.max((rawMaxY - rawMinY) * 0.12, 1);
+  const minX = rawMinX - padX, maxX = rawMaxX + padX;
+  const minY = rawMinY - padY, maxY = rawMaxY + padY;
+  const px = (x: number) => L + ((x - minX) / Math.max(1e-9, maxX - minX)) * (W - L - R);
+  const py = (y: number) => H - B - ((y - minY) / Math.max(1e-9, maxY - minY)) * (H - T - B);
 
   return (
     <div>
@@ -165,6 +170,7 @@ function ScatterChart({ data }: { data: Record<string, unknown> }) {
 }
 
 function LpRegionChart({ data }: { data: Record<string, unknown> }) {
+  const clipId = useId();
   const lines = (data.lines as { name: string; points: [number, number][] }[]) ?? [];
   const poly = (data.polygon as [number, number][]) ?? [];
   const opt = (data.optimum as [number, number] | null) ?? null;
@@ -179,13 +185,13 @@ function LpRegionChart({ data }: { data: Record<string, unknown> }) {
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
         <defs>
-          <clipPath id="lp-clip"><rect x={L} y={T} width={W - L - R} height={H - T - B} /></clipPath>
+          <clipPath id={clipId}><rect x={L} y={T} width={W - L - R} height={H - T - B} /></clipPath>
         </defs>
         <line x1={L} y1={H - B} x2={W - R} y2={H - B} stroke="#9ca3af" />
         <line x1={L} y1={T} x2={L} y2={H - B} stroke="#9ca3af" />
         <text x={W - R} y={H - 10} textAnchor="end" fontSize={10} fill="#4b5563">{String(data.x_label ?? "X1")}</text>
         <text x={L + 4} y={T + 10} fontSize={10} fill="#4b5563">{String(data.y_label ?? "X2")}</text>
-        <g clipPath="url(#lp-clip)">
+        <g clipPath={`url(#${clipId})`}>
           {poly.length >= 3 && <polygon points={polyAttr} fill="#0f5257" fillOpacity={0.18} stroke="#0f5257" strokeWidth={1.5} />}
           {lines.map((ln, i) => (
             <line
@@ -211,6 +217,9 @@ function LpRegionChart({ data }: { data: Record<string, unknown> }) {
 }
 
 function NetworkChart({ data }: { data: Record<string, unknown> }) {
+  const uid = useId();
+  const arrNormalId = `${uid}-normal`;
+  const arrHiId = `${uid}-hi`;
   const nodes = (data.nodes as { id: string; label: string; highlight: boolean }[]) ?? [];
   const edges = (data.edges as { source: string; target: string; label: string; highlight: boolean }[]) ?? [];
   const directed = Boolean(data.directed);
@@ -247,10 +256,10 @@ function NetworkChart({ data }: { data: Record<string, unknown> }) {
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
       <defs>
-        <marker id="arr-normal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <marker id={arrNormalId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 1 L 10 5 L 0 9 z" fill="#9ca3af" />
         </marker>
-        <marker id="arr-hi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <marker id={arrHiId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
           <path d="M 0 1 L 10 5 L 0 9 z" fill="#d97706" />
         </marker>
       </defs>
@@ -266,7 +275,7 @@ function NetworkChart({ data }: { data: Record<string, unknown> }) {
             <line
               x1={x1} y1={y1} x2={x2} y2={y2}
               stroke={e.highlight ? "#d97706" : "#b8b3a8"} strokeWidth={e.highlight ? 2.5 : 1.3}
-              markerEnd={directed ? (e.highlight ? "url(#arr-hi)" : "url(#arr-normal)") : undefined}
+              markerEnd={directed ? (e.highlight ? `url(#${arrHiId})` : `url(#${arrNormalId})`) : undefined}
             />
             {e.label && (
               <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 4} textAnchor="middle" fontSize={9.5} fontWeight={600}

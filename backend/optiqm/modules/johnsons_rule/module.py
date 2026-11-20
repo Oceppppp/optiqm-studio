@@ -71,4 +71,46 @@ class JohnsonsRule(BaseModule):
                 rows_out)
         r.chart("Gantt Chart — Mesin 1 & Mesin 2", "gantt", {"tasks": tasks})
         r.interpretation = f"Urutan optimal Johnson's Rule: {' → '.join(j[0] for j in seq)} dengan makespan = {t2:g}."
+
+        # Analisis mendalam
+        sum_m1 = sum(j[1] for j in seq)
+        sum_m2 = sum(j[2] for j in seq)
+        util_m1 = (sum_m1 / t2 * 100.0) if t2 > 0 else 0.0
+        util_m2 = (sum_m2 / t2 * 100.0) if t2 > 0 else 0.0
+        idle_m1_end = max(0.0, t2 - sum_m1)
+        # Hitung makespan urutan awal (FCFS) untuk pembanding
+        fcfs_t1 = fcfs_t2 = 0.0
+        for _, p1, p2 in jobs:
+            fcfs_t1 += p1
+            fcfs_t2 = max(fcfs_t1, fcfs_t2) + p2
+        saved = max(0.0, fcfs_t2 - t2)
+        lower_bound = max(sum_m1 + min(j[2] for j in jobs), sum_m2 + min(j[1] for j in jobs))
+        r.analyze(
+            "Metodologi Johnson's Rule (Flow Shop 2 Mesin)",
+            f"Sebanyak {len(jobs)} pekerjaan dijadwalkan melewati Mesin 1 lalu Mesin 2 secara berurutan. "
+            "Algoritma Johnson menempatkan pekerjaan dengan waktu terkecil di M1 ke awal urutan dan waktu terkecil di M2 ke akhir urutan, "
+            "yang secara matematis menjamin Makespan minimum global.",
+            [
+                f"Urutan Optimal: {' → '.join(j[0] for j in seq)} menghasilkan Makespan = {t2:g} (batas bawah teoretis = {lower_bound:g}).",
+                f"Penghematan dibanding urutan awal tabel (FCFS = {fcfs_t2:g}): menghemat {saved:g} satuan waktu ({(saved / fcfs_t2 * 100.0) if fcfs_t2 > 0 else 0:.1f}%).",
+            ],
+        )
+        bottleneck = "Mesin 1" if sum_m1 >= sum_m2 else "Mesin 2"
+        r.analyze(
+            "Bedah Utilisasi Mesin & Waktu Menganggur (Idle Time)",
+            "Keseimbangan beban kerja antara Mesin 1 dan Mesin 2 menentukan seberapa lama mesin harus menunggu pekerjaan:",
+            [
+                f"Mesin 1: total waktu kerja = {sum_m1:g}, selesai di t = {t1:g}, utilisasi = {util_m1:.1f}%, idle di akhir = {idle_m1_end:g}.",
+                f"Mesin 2: total waktu kerja = {sum_m2:g}, selesai di t = {t2:g}, utilisasi = {util_m2:.1f}%, total idle = {idle_m2:g} (termasuk tunggu awal {rows_out[0][7]:g} dari job '{seq[0][0]}').",
+                f"Mesin pembatas kapasitas (bottleneck): {bottleneck} (beban {max(sum_m1, sum_m2):g} vs {min(sum_m1, sum_m2):g}).",
+            ],
+        )
+        r.analyze(
+            "Rekomendasi Penjadwalan Lantai Produksi",
+            "Langkah eksekusi jadwal flow shop:",
+            [
+                f"Jalankan urutan tepat {' → '.join(j[0] for j in seq)} pada kedua mesin agar total waktu selesai tidak melampaui {t2:g}.",
+                f"Untuk memangkas makespan lebih lanjut di bawah {t2:g}, fokuskan percepatan proses pada {bottleneck} dan job awal '{seq[0][0]}' (yang menunda start Mesin 2) atau job akhir '{seq[-1][0]}' (ekor M2 = {seq[-1][2]:g}).",
+            ],
+        )
         return r

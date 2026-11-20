@@ -55,9 +55,13 @@ class GoalProgramming(BaseModule):
             coeffs = np.array([0.0 if pd.isna(df.at[i, c]) else to_float(df.at[i, c], f"{nm}/{c}") for c in var_cols])
             target = to_float(df.at[i, target_col], f"Target {nm}")
             pr = int(round(to_float(df.at[i, prio_col], f"Priority {nm}")))
+            if pr < 0:
+                raise InputError(f"Priority pada '{nm}' tidak boleh negatif (0 = kendala keras, ≥1 = prioritas tujuan).")
             sg = normalize_sign(df.at[i, sign_col], nm) if sign_col and not pd.isna(df.at[i, sign_col]) else "="
             wm = to_float(df.at[i, wm_col], f"W_minus {nm}") if wm_col and not pd.isna(df.at[i, wm_col]) else (1.0 if sg == ">=" else 0.0)
             wp = to_float(df.at[i, wp_col], f"W_plus {nm}") if wp_col and not pd.isna(df.at[i, wp_col]) else (1.0 if sg == "<=" else 0.0)
+            if wm < 0 or wp < 0:
+                raise InputError(f"Bobot penalti W_minus/W_plus pada '{nm}' harus ≥ 0.")
             if sg == "=" and wm == 0 and wp == 0 and pr > 0:
                 wm = wp = 1.0
             rows.append(GoalRow(nm, coeffs, target, pr, wm, wp, sg))
@@ -82,4 +86,52 @@ class GoalProgramming(BaseModule):
             g_rows.append([g.priority, g.name, lhs, g.target, dm, dp, status])
         r.table("Analisis Pencapaian Tujuan", ["Prioritas", "Tujuan", "Aktual", "Target", "d⁻ (Kurang)", "d⁺ (Lebih)", "Status"], g_rows)
         r.interpretation = ", ".join(f"{v}={val:g}" for v, val in zip(var_cols, out["x"])) + f" — {achieved}/{len(out['steps'])} prioritas tercapai penuh."
+
+        # Analisis mendalam
+        hard_cnt = len(out.get("hard") or [])
+        r.analyze(
+            "Metodologi Preemptive (Lexicographic) Goal Programming",
+            f"Optimasi dilakukan secara bertahap untuk {len(out['steps'])} tingkat prioritas ({len(out['goals'])} tujuan lunak) "
+            f"dan {hard_cnt} kendala keras (Priority = 0). Setiap tujuan diformulasikan sebagai Σ(a_j·X_j) + d⁻ − d⁺ = Target, "
+            "lalu penalti deviasi diminimalkan mulai dari Prioritas 1 sambil mengunci hasil prioritas yang lebih tinggi.",
+            [
+                f"Prioritas {pr}: total penalti deviasi minimal = {val:,.4f} ({'tercapai sempurna' if val < 1e-6 else 'masih menyisakan deviasi'})."
+                for pr, val in out["steps"]
+            ],
+        )
+
+        goal_bullets: list[str] = []
+        missed = []
+        for k, g in enumerate(out["goals"]):
+            lhs = float(g.coeffs @ out["x"])
+            dm, dp = float(out["d_minus"][k]), float(out["d_plus"][k])
+            pen = g.w_minus * dm + g.w_plus * dp
+            if pen < 1e-6:
+                extra = f" (melebihi target sebesar {dp:,.4g})" if dp > 1e-6 else (f" (di bawah batas sebesar {dm:,.4g})" if dm > 1e-6 else " (tepat pada target)")
+                goal_bullets.append(f"[P{g.priority}] '{g.name}': TERCAPAI — aktual {lhs:,.4g} vs target {g.target:,.4g}{extra}.")
+            else:
+                missed.append((g, dm, dp, pen))
+                arah = f"kurang d⁻ = {dm:,.4g}" if dm > 1e-6 else f"lebih d⁺ = {dp:,.4g}"
+                goal_bullets.append(
+                    f"[P{g.priority}] '{g.name}': TIDAK TERCAPAI PENUH — aktual {lhs:,.4g} vs target {g.target:,.4g} ({arah}, penalti = {pen:,.4g})."
+                )
+        for h in out.get("hard") or []:
+            lhs_h = float(h.coeffs @ out["x"])
+            goal_bullets.append(f"[Kendala Keras] '{h.name}': {lhs_h:,.4g} {h.sign} {h.target:,.4g} (sisa {abs(h.target - lhs_h):,.4g}).")
+        r.analyze(
+            "Bedah Pencapaian Tujuan & Konflik Prioritas",
+            "Rincian deviasi kekurangan (d⁻) dan kelebihan (d⁺) menunjukkan tujuan mana yang terpenuhi dan di mana terjadi trade-off antar prioritas.",
+            goal_bullets,
+        )
+
+        rec_bullets: list[str] = []
+        if not missed:
+            rec_bullets.append("Seluruh prioritas berhasil dipenuhi tanpa penalti deviasi; solusi ini merupakan kompromi optimal yang memenuhi semua target.")
+        else:
+            names_m = ", ".join(f"P{g.priority} ({g.name})" for g, *_ in missed)
+            rec_bullets.append(f"Terdapat konflik sumber daya/target pada {names_m} karena ruang solusi sudah dibatasi oleh prioritas lebih tinggi dan kendala keras.")
+            rec_bullets.append("Evaluasi apakah target prioritas atas dapat direlaksasi sedikit, atau naikkan peringkat prioritas tujuan yang meleset bila dianggap lebih kritis.")
+            if hard_cnt:
+                rec_bullets.append("Periksa kendala keras yang terpakai penuh—penambahan kapasitas pada kendala tersebut dapat menghilangkan deviasi tujuan lunak.")
+        r.analyze("Rekomendasi Manajerial", "Tindak lanjut strategis terhadap hasil kompromi multi-tujuan:", rec_bullets)
         return r

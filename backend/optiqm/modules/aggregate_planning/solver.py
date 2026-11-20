@@ -16,6 +16,14 @@ def solve_aggregate(
     if strategy in {"chase", "level"}:
         return _heuristic(periods, demand, reg_cap, ot_cap, sub_cap, costs, init_inv, init_prod, strategy)
 
+    total_cap = float(reg_cap.sum() + ot_cap.sum() + sub_cap.sum() + init_inv)
+    total_dem = float(demand.sum())
+    if total_cap < total_dem - 1e-6:
+        raise SolverError(
+            f"Total kapasitas tersedia ({total_cap:,.2f}) lebih kecil dari total permintaan ({total_dem:,.2f}); "
+            "permintaan horizon tidak mungkin terpenuhi seluruhnya."
+        )
+
     # LP Optimal: variabel per periode t = [R_t, O_t, S_t, I+_t, I-_t, H_t, L_t] -> 7*T variabel
     # (H_t = hire / kenaikan produksi, L_t = layoff / penurunan produksi)
     k = 7
@@ -34,7 +42,8 @@ def solve_aggregate(
         ub[b + 0] = reg_cap[t]
         ub[b + 1] = ot_cap[t]
         ub[b + 2] = sub_cap[t]
-        if not allow_backorder:
+        if not allow_backorder or t == T - 1:
+            # Backorder pada akhir horizon wajib 0 agar seluruh permintaan benar-benar terpenuhi
             ub[b + 4] = 0.0
 
     A_eq, b_eq = [], []

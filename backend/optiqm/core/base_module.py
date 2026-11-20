@@ -46,6 +46,46 @@ class BaseModule(ABC):
             out[spec.name] = coerce_param(spec, data.param(spec.name, spec.default))
         return out
 
+    def resolved_params_with_table(
+        self, data: SheetData, aliases: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Seperti ``resolved_params``, dengan fallback membaca tabel ``[main]`` (Parameter | Value)
+        bila parameter belum diisi secara eksplisit di ``data.params``."""
+        from .parsing import coerce_param
+        from .sheet import _norm
+
+        explicit = {
+            _norm(k)
+            for k, v in data.params.items()
+            if v is not None and not (isinstance(v, str) and not v.strip())
+        }
+        table_vals: dict[str, Any] = {}
+        df = data.table("main", required=False)
+        if df is not None and len(df.columns) >= 2:
+            alias_map = {_norm(k): _norm(v) for k, v in (aliases or {}).items()}
+            for _, row in df.iterrows():
+                rk, rv = row.iloc[0], row.iloc[1]
+                if rk is None or (isinstance(rk, float) and rk != rk):
+                    continue
+                if rv is None or (isinstance(rv, float) and rv != rv):
+                    continue
+                if isinstance(rv, str) and not rv.strip():
+                    continue
+                nk = alias_map.get(_norm(str(rk)), _norm(str(rk)))
+                table_vals[nk] = rv
+
+        out: dict[str, Any] = {}
+        for spec in self.params:
+            nk = _norm(spec.name)
+            if nk in explicit:
+                raw = data.param(spec.name, spec.default)
+            elif nk in table_vals:
+                raw = table_vals[nk]
+            else:
+                raw = spec.default
+            out[spec.name] = coerce_param(spec, raw)
+        return out
+
     def metadata(self) -> dict[str, Any]:
         tpl = self.template()
         tpl.params.setdefault("module", self.key)
