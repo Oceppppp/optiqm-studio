@@ -17,8 +17,11 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
       try {
         const body = JSON.parse(text);
         if (body?.detail) msg = String(body.detail);
+        else if (body?.error) msg = String(body.error);
+        else if (body?.message) msg = String(body.message);
       } catch {
-        // keep status
+        const snippet = text.trim().replace(/\s+/g, " ").slice(0, 220);
+        if (snippet) msg = `HTTP ${res.status} — ${snippet}`;
       }
     } else if (!API_BASE) {
       msg =

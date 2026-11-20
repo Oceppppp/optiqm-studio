@@ -14,7 +14,7 @@ dependencies = [
   "openpyxl>=3.1",
   "networkx>=3.2",
   "fastapi>=0.110",
-  "uvicorn[standard]>=0.27",
+  "uvicorn>=0.27",
   "python-multipart>=0.0.9",
   "reportlab>=4.0",
 ]
@@ -34,4 +34,4 @@ testpaths = ["tests"]
 pythonpath = [".", "tests"]
 
 [tool.vercel]
-entrypoint = "optiqm.api.app:app"
+entrypoint = "main:app"

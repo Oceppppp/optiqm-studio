@@ -4,10 +4,10 @@
     "backend": {
       "root": "backend",
       "framework": "fastapi",
-      "entrypoint": "optiqm.api.app:app",
+      "entrypoint": "main:app",
       "functions": {
-        "optiqm/api/app.py": {
-          "excludeFiles": "{tests/**,.pytest_cache/**,**/*.egg-info/**}"
+        "main.py": {
+          "excludeFiles": "{tests/**,.pytest_cache/**,**/*.egg-info/**,Dockerfile}"
         }
       }
     },
