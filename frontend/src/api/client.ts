@@ -22,7 +22,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
       }
     } else if (!API_BASE) {
       msg =
-        "Backend API belum terhubung (VITE_API_BASE_URL belum diisi). Deploy folder backend/ ke Render/Railway lalu isi Environment Variable VITE_API_BASE_URL di Netlify dan redeploy.";
+        "Backend API belum terhubung di /api. Jika di Vercel, deploy dari root repo dengan Framework Preset 'Services' (vercel.json). Jika frontend terpisah (mis. Netlify), deploy backend/ lalu isi VITE_API_BASE_URL.";
     } else {
       msg = `Backend (${API_BASE}) mengembalikan HTML (HTTP ${res.status}), bukan JSON. Pastikan URL VITE_API_BASE_URL benar dan server backend aktif.`;
     }
@@ -32,7 +32,7 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (isHtml) {
     if (!API_BASE) {
       throw new Error(
-        "Backend API belum terhubung (VITE_API_BASE_URL belum diisi). Deploy folder backend/ ke Render/Railway lalu isi Environment Variable VITE_API_BASE_URL di Netlify dan redeploy."
+        "Backend API belum terhubung di /api. Jika di Vercel, deploy dari root repo dengan Framework Preset 'Services' (vercel.json). Jika frontend terpisah (mis. Netlify), deploy backend/ lalu isi VITE_API_BASE_URL dan redeploy."
       );
     }
     throw new Error(

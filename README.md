@@ -41,7 +41,14 @@ cd backend && ../.venv/bin/python -m pytest -v
 - [Panduan Menambah Modul Baru](docs/MODULE_GUIDE.md)
 - Contoh workbook siap upload: [OptiQM_Sample_10_Modul.xlsx](samples/OptiQM_Sample_10_Modul.xlsx)
 
-## Deploy Online (Netlify + Backend Python)
+## Deploy Online
+
+### Opsi A: Vercel (Multi-Service dalam 1 Project)
+Repo ini sudah menyertakan [`vercel.json`](vercel.json) untuk menjalankan `frontend` (Vite) dan `backend` (FastAPI) dalam **satu project Vercel** pada domain yang sama:
+- Pastikan **Root Directory** di Vercel mengarah ke root repositori (`.`) dan **Framework Preset** diatur ke **Services** (atau jalankan `vercel deploy` / `vercel dev -L` dari root repo via Vercel CLI).
+- Tidak perlu mengisi `VITE_API_BASE_URL` di Vercel karena `/api/*` otomatis diteruskan ke service `backend`.
+
+### Opsi B: Netlify + Backend Python Terpisah
 Karena Netlify hanya menghosting frontend statis, deploy aplikasi web terbagi menjadi dua bagian:
 
 1. **Backend FastAPI (`backend/`)** — deploy ke **Render** (otomatis memakai `render.yaml`), **Railway**, **Fly.io**, atau host Docker mana pun memakai `backend/Dockerfile` dengan perintah:

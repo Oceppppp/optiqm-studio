@@ -32,3 +32,6 @@ include = ["optiqm*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+
+[tool.vercel]
+entrypoint = "optiqm.api.app:app"
